@@ -81,6 +81,7 @@ def run_one(cfg, args, exp_dir: Path) -> dict:
         except Exception:
             meta = {}
     answer = job_dir / "ANSWER.md"
+    tokens = meta.get("tokens") or {}
     row = {
         "name": name,
         "env": cfg.get("env"),
@@ -89,8 +90,14 @@ def run_one(cfg, args, exp_dir: Path) -> dict:
         "stop_reason": meta.get("stop_reason"),
         "done": meta.get("done"),
         "budget": meta.get("budget"),
+        "budget_metric": meta.get("budget_metric"),
         "input_tokens_spent": meta.get("input_tokens_spent"),
         "budget_pct": meta.get("budget_pct"),
+        "tokens_input": tokens.get("input"),
+        "tokens_output": tokens.get("output"),
+        "tokens_cacheRead": tokens.get("cacheRead"),
+        "tokens_cacheWrite": tokens.get("cacheWrite"),
+        "tokens_total": tokens.get("total"),
         "turns": meta.get("turns"),
         "tool_calls": meta.get("tool_calls"),
         "answer_present": meta.get("answer_present"),

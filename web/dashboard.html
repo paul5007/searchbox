@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<meta name="theme-color" content="#000000" />
+<title>searchbox · job __JOB_ID__</title>
+<style>
+  :root{ --bg:#fff; --fg:#000; --mut:#666; --line:#000; --soft:#e5e5e5; --fill:#000; }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#000; --fg:#fff; --mut:#999; --line:#fff; --soft:#222; --fill:#fff; }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:"Berkeley Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    font-size:13px;line-height:1.45;overflow-x:hidden}
+  a{color:inherit}
+  .wrap{width:100%;padding:20px 28px;min-width:0}
+  header{display:flex;justify-content:space-between;align-items:baseline;
+    border-bottom:1px solid var(--line);padding-bottom:12px}
+  h1{font-size:14px;font-weight:600;letter-spacing:.04em;margin:0;text-transform:uppercase}
+  .meta{color:var(--mut);font-size:11px}
+  .dot{display:inline-block;width:7px;height:7px;border:1px solid var(--line);margin-right:6px;vertical-align:middle}
+  .dot.on{background:var(--fill)}
+  .blink{animation:b 1s steps(2) infinite}
+  @keyframes b{50%{opacity:.2}}
+  .banner{border:1px solid var(--line);border-left-width:4px;padding:8px 12px;
+    border-bottom:none;font-size:12px;display:none;overflow-wrap:anywhere}
+  .query{border-bottom:1px solid var(--line);padding:8px 0;color:var(--mut);font-size:11px;overflow-wrap:anywhere}
+  .query b{color:var(--fg)}
+  .cfg{border-bottom:1px solid var(--line);padding:6px 0;color:var(--mut);font-size:11px}
+  .cfg b{color:var(--fg)}
+  /* HERO: budget spend | now */
+  .hero{display:grid;grid-template-columns:1fr 1fr;
+    border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .hero > div{border-right:1px solid var(--line);padding:18px 16px;min-width:0}
+  .k{color:var(--mut);font-size:10px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+  .big{font-size:26px;font-weight:600;line-height:1}
+  .sub{color:var(--mut);font-size:11px;margin-top:2px}
+  .pbar{height:18px;border:1px solid var(--line);position:relative;margin-top:10px;overflow:hidden}
+  .pbar > i{position:absolute;left:0;top:0;bottom:0;background:var(--fill);width:0%}
+  .pbar.over > i{background:repeating-linear-gradient(45deg,var(--fill) 0 5px,transparent 5px 10px)}
+  .now .nowline{font-size:13px;overflow-wrap:anywhere;min-height:1.45em}
+  .now .nowline .t{color:var(--mut);margin-right:8px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+    border-left:1px solid var(--line);border-bottom:1px solid var(--line)}
+  .cell{border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:14px 16px;min-width:0;overflow:hidden}
+  .cell.errcell{display:none}
+  .cell.errcell.has{display:block;grid-column:1/-1;border-left:4px solid var(--line)}
+  .bar{height:14px;border:1px solid var(--line);position:relative;margin-top:10px;overflow:hidden}
+  .bar > i{position:absolute;left:0;top:0;bottom:0;background:var(--fill);width:0%}
+  .bar.warn > i{background:repeating-linear-gradient(45deg,var(--fill) 0 4px,transparent 4px 8px)}
+  .dist{margin-top:4px}
+  .row{display:flex;align-items:center;gap:8px;margin:3px 0}
+  .row .name{width:140px;max-width:45%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .track{flex:1;height:10px;border:1px solid var(--line);position:relative}
+  .row .track > i{position:absolute;left:0;top:0;bottom:0;background:var(--fill)}
+  .row .n{width:34px;text-align:right;color:var(--mut)}
+  .tbl{width:100%;border-collapse:collapse;margin-top:4px;font-size:12px}
+  .tbl td{padding:2px 0}
+  .tbl td.v{text-align:right}
+  .panel{padding:14px 16px;border-bottom:1px solid var(--line)}
+  .feed{margin:0;list-style:none;padding:0;max-height:min(34vh,360px);overflow:auto;font-size:12px}
+  .feed li{display:flex;gap:8px;padding:1px 0;white-space:nowrap;min-width:0}
+  .feed li .t{color:var(--mut);width:42px;flex:none}
+  .feed li .v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .feed li.live .v{font-weight:600;white-space:normal;overflow:visible}
+  .errs{margin:0;list-style:none;padding:0;max-height:min(30vh,260px);overflow:auto;font-size:12px}
+  .errs li{border-left:3px solid var(--line);padding:2px 0 2px 8px;margin:3px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .empty{color:var(--mut);font-size:11px}
+  pre.tree{margin:0;white-space:pre;overflow:auto;max-height:min(50vh,640px);font-size:12px}
+  .tree .d{font-weight:600}
+  .tree .s{color:var(--mut)}
+  .tree .f{cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+  .tree .f:hover{background:var(--soft)}
+  .tree .f.sel{background:var(--fill);color:var(--bg)}
+  .split{display:grid;grid-template-columns:minmax(240px,36%) 1fr;padding:0}
+  .treecol{padding:14px 16px;border-right:1px solid var(--line);min-width:0}
+  .prevcol{padding:14px 16px;min-width:0;overflow:hidden}
+  .prev{margin-top:6px;max-height:min(50vh,640px);overflow:auto}
+  .prev pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.5}
+  .ans{padding:14px 16px;border-bottom:1px solid var(--line)}
+  .ans .body{margin-top:6px;max-height:min(50vh,640px);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12.5px;line-height:1.55}
+  @media(max-width:760px){.hero{grid-template-columns:1fr}.hero>div{border-right:none;border-bottom:1px solid var(--line)}.split{grid-template-columns:1fr}.treecol{border-right:none;border-bottom:1px solid var(--line)}}
+  .foot{display:flex;justify-content:space-between;color:var(--mut);font-size:11px;padding-top:12px}
+  .actions{display:flex;gap:6px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .icon{width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;
+    border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer;text-decoration:none}
+  .icon:hover{background:var(--soft)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><a href="/" title="Home">Searchbox</a></h1>
+    <div class="meta">job <b id="jid">__JOB_ID__</b> · <span id="st"><span class="dot blink"></span>connecting</span></div>
+  </header>
+
+  <div class="actions">
+    <a class="icon" href="/" title="All jobs"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5L5.5 8l4.5 4.5"/></svg></a>
+  </div>
+
+  <div class="banner" id="banner"></div>
+  <div class="query">QUERY&nbsp;&nbsp;<b id="q">—</b></div>
+  <div class="cfg">MODEL <b id="model">—</b> &nbsp;·&nbsp; TOOLS <b id="tools">—</b> &nbsp;·&nbsp; BUDGET METRIC <b id="bmetric">input</b></div>
+
+  <div class="hero">
+    <div class="prog">
+      <div class="k">Input-token budget spent</div>
+      <div class="big"><span id="spent">0</span> <span style="font-size:13px;color:var(--mut)">/ <span id="bud">0</span></span></div>
+      <div class="pbar" id="pbar"><i></i></div>
+      <span id="progpct" class="sub">0%</span>
+    </div>
+    <div class="now">
+      <div class="k">Now</div>
+      <div class="nowline" id="nowline"><span class="empty">waiting for the agent…</span></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="cell errcell" id="errcell">
+      <div class="k">Warnings / errors <span id="errN" class="sub" style="margin:0"></span></div>
+      <ul class="errs" id="errs"></ul>
+    </div>
+    <div class="cell">
+      <div class="k">Token usage (pi session)</div>
+      <table class="tbl">
+        <tr><td>input (budget)</td><td class="v" id="tkIn">0</td></tr>
+        <tr><td>output</td><td class="v" id="tkOut">0</td></tr>
+        <tr><td>cache read</td><td class="v" id="tkCR">0</td></tr>
+        <tr><td>cache write</td><td class="v" id="tkCW">0</td></tr>
+        <tr><td><b>total</b></td><td class="v" id="tkTot"><b>0</b></td></tr>
+      </table>
+    </div>
+    <div class="cell">
+      <div class="k">Context window</div>
+      <div class="big"><span id="ctxpct">0</span>%</div>
+      <div class="sub"><span id="ctxtok">0</span> / <span id="ctxwin">0</span></div>
+      <div class="sub"><span id="cmp">0</span> compactions</div>
+      <div class="bar" id="ctxbar"><i></i></div>
+    </div>
+    <div class="cell">
+      <div class="k">Tool calls</div>
+      <div class="big" id="toolN">0</div>
+      <div class="sub"><span id="turns">0</span> turns · <span id="steps">0</span> steps</div>
+    </div>
+    <div class="cell">
+      <div class="k">Corpus</div>
+      <div class="big" id="cfiles">0</div>
+      <div class="sub"><span id="csize">0 B</span> · files indexed</div>
+    </div>
+    <div class="cell">
+      <div class="k">Tool distribution</div>
+      <div class="dist" id="dist"><div class="empty">no calls yet</div></div>
+    </div>
+  </div>
+
+  <div class="ans">
+    <div class="k">ANSWER.md <span id="ansN" class="sub" style="margin:0;text-transform:none;letter-spacing:0"></span></div>
+    <div class="body" id="ans"><div class="empty">no answer yet — agent is still exploring</div></div>
+  </div>
+
+  <div class="panel">
+    <div class="k">Activity</div>
+    <ul class="feed" id="feed"><li class="empty">waiting for the agent…</li></ul>
+  </div>
+
+  <div class="panel split">
+    <div class="treecol">
+      <div class="k">Corpus + output tree</div>
+      <pre class="tree" id="tree">—</pre>
+    </div>
+    <div class="prevcol">
+      <div class="k">Preview <span id="prevname" class="sub" style="margin:0;text-transform:none;letter-spacing:0"></span></div>
+      <div class="prev" id="prev"><div class="empty">click a file in the tree</div></div>
+    </div>
+  </div>
+
+  <div class="foot"><div>auto-refresh 3s · <span id="ts">—</span></div></div>
+</div>
+
+<script>
+const JOB="__JOB_ID__";
+const $=id=>document.getElementById(id);
+let lastOk=0;
+function human(b){if(b<1024)return b+" B";const u=["KB","MB","GB"];let i=-1;do{b/=1024;i++}while(b>=1024&&i<2);return b.toFixed(b<10?1:0)+" "+u[i];}
+function esc(s){return String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+function renderTree(node,prefix="",isLast=true,root=true,path=""){
+  let out="";
+  if(root){out+=`<span class="d">${esc(node.name)}/</span>\n`;const ch=node.children||[];ch.forEach((c,i)=>out+=renderTree(c,"",i===ch.length-1,false,c.name));return out;}
+  const branch=isLast?"└─ ":"├─ ";
+  if(node.type==="dir"){out+=`${prefix}${branch}<span class="d">${esc(node.name)}/</span>\n`;const ch=node.children||[];const np=prefix+(isLast?"   ":"│  ");ch.forEach((c,i)=>out+=renderTree(c,np,i===ch.length-1,false,path+"/"+c.name));}
+  else{out+=`${prefix}${branch}<span class="f" data-path="${esc(path)}">${esc(node.name)}</span> <span class="s">(${human(node.size)})</span>\n`;}
+  return out;
+}
+let selPath=null,selImg=false,lastPrev=null,lastTree=null;
+const IMG=["png","jpg","jpeg","gif","svg","webp"];
+function applySel(){if(!selPath)return;document.querySelectorAll("#tree .f").forEach(el=>el.classList.toggle("sel",el.getAttribute("data-path")===selPath));}
+async function loadPreview(path){
+  selPath=path;selImg=IMG.includes((path.split(".").pop()||"").toLowerCase());lastPrev=null;
+  $("prevname").textContent=path;applySel();
+  const url=`/jobs/${JOB}/file?path=${encodeURIComponent(path)}`;
+  if(selImg){$("prev").innerHTML=`<img src="${url}" style="max-width:100%">`;return;}
+  $("prev").innerHTML='<div class="empty">loading…</div>';
+  try{const r=await fetch(url,{cache:"no-store"});const t=await r.text();lastPrev=t;$("prev").innerHTML=`<pre>${esc(t)}</pre>`;}
+  catch(e){$("prev").innerHTML=`<div class="empty">could not load</div>`;}
+}
+async function refreshPreview(){
+  if(!selPath||selImg)return;
+  try{const r=await fetch(`/jobs/${JOB}/file?path=${encodeURIComponent(selPath)}`,{cache:"no-store"});if(!r.ok)return;const t=await r.text();if(t===lastPrev)return;lastPrev=t;const box=$("prev"),top=box.scrollTop;box.innerHTML=`<pre>${esc(t)}</pre>`;box.scrollTop=top;}catch(e){}
+}
+$("tree").addEventListener("click",e=>{const f=e.target.closest(".f");if(f)loadPreview(f.getAttribute("data-path"));});
+
+const STOP={
+  budget_spent:["done","DONE — input-token budget spent, answer written"],
+  ceiling_seconds:["stop","STOPPED — wall-clock ceiling"],
+  ceiling_turns:["stop","STOPPED — turn ceiling"],
+  error_corpus_boot:["err","ERROR — corpus sidecar failed to start"],
+  cancelled:["stop","CANCELLED"],paused:["stop","PAUSED"],
+};
+function setStatus(s,done){
+  const el=$("st");
+  if(done)el.innerHTML='<span class="dot on"></span>done';
+  else if(s==="running")el.innerHTML='<span class="dot on blink"></span>running';
+  else if(s==="stopped")el.innerHTML='<span class="dot on"></span>stopped';
+  else if(s==="failed")el.innerHTML='<span class="dot on"></span>failed';
+  else el.innerHTML='<span class="dot"></span>'+(s||"queued");
+}
+
+async function tick(){
+  try{
+    const r=await fetch(`/jobs/${JOB}/stats`,{cache:"no-store"});
+    if(!r.ok)throw 0;
+    const d=await r.json();lastOk=Date.now();
+    const live=d.job_status==="running";
+    $("q").textContent=d.query||"—";
+    $("model").textContent=d.model_id||"—";
+    $("tools").textContent=d.tools_enabled||"—";
+    $("bmetric").textContent=d.budget_metric||"input";
+
+    // budget (the input-token spend the whole thing is built around)
+    const b=d.budget||{};
+    $("spent").textContent=(b.spent||0).toLocaleString();
+    $("bud").textContent=(b.target||0).toLocaleString();
+    $("progpct").textContent=(b.percent||0)+"%"+(b.spent>b.target?" · over budget, finalizing":"");
+    const pb=$("pbar");pb.querySelector("i").style.width=Math.min(100,b.percent||0)+"%";
+    pb.classList.toggle("over",(b.spent||0)>(b.target||0));
+
+    // full token breakdown
+    const tk=d.tokens||{};
+    $("tkIn").textContent=(tk.input||0).toLocaleString();
+    $("tkOut").textContent=(tk.output||0).toLocaleString();
+    $("tkCR").textContent=(tk.cacheRead||0).toLocaleString();
+    $("tkCW").textContent=(tk.cacheWrite||0).toLocaleString();
+    $("tkTot").innerHTML="<b>"+(tk.total||0).toLocaleString()+"</b>";
+
+    // context occupancy = latest call's input+cacheRead vs the window (what compaction acts on)
+    const win=d.context_window||0;
+    $("ctxwin").textContent=(win||0).toLocaleString();
+    $("ctxtok").textContent=(d.context_tokens||0).toLocaleString();
+    $("ctxpct").textContent=(d.context_percent||0);
+    const cb=$("ctxbar");cb.querySelector("i").style.width=Math.min(100,d.context_percent||0)+"%";
+    cb.classList.toggle("warn",(d.context_percent||0)>=80);
+    $("cmp").textContent=d.compactions||0;
+
+    $("toolN").textContent=d.tool_calls||0;
+    $("turns").textContent=d.turns||0;
+    $("steps").textContent=d.steps||0;
+    const c=d.corpus||{};
+    $("cfiles").textContent=c.file_count||0;
+    $("csize").textContent=human(c.size_bytes||0);
+
+    const dist=d.tool_distribution||{};const ks=Object.keys(dist);const max=Math.max(1,...Object.values(dist));
+    $("dist").innerHTML=ks.length?ks.map(k=>`<div class="row"><span class="name">${esc(k)}</span><span class="track"><i style="width:${100*dist[k]/max}%"></i></span><span class="n">${dist[k]}</span></div>`).join(""):'<div class="empty">no calls yet</div>';
+
+    // answer
+    const am=d.answer_md||"";
+    $("ansN").textContent=am?`(${am.length.toLocaleString()} chars)`:"";
+    $("ans").innerHTML=am?esc(am):'<div class="empty">no answer yet — agent is still exploring</div>';
+
+    // activity
+    const rec=d.recent||[];let pt=null;
+    $("feed").innerHTML=rec.length?rec.map((e,i)=>{const tn=e.turn||0,tc=tn===pt?'':'t'+tn;pt=tn;const nw=i===rec.length-1;return `<li class="${nw&&live?'live':''}"><span class="t">${tc}</span><span class="v">${nw&&live?'<span class="dot on blink"></span>':''}${esc(e.tool==='say'?'· '+e.text:e.text)}</span></li>`;}).join(""):'<li class="empty">waiting…</li>';
+    const fe=$("feed");fe.scrollTop=fe.scrollHeight;
+    if(rec.length){const e=rec[rec.length-1];$("nowline").innerHTML=`<span class="dot on${live?' blink':''}"></span><span class="t">t${e.turn||0}</span>`+esc(e.text);}
+
+    // errors
+    const errs=d.errors||[];
+    $("errN").textContent=errs.length?`(${errs.length})`:"";
+    $("errcell").classList.toggle("has",errs.length>0);
+    $("errs").innerHTML=errs.slice(-30).map(e=>`<li>${e.turn!=null?`[t${e.turn}] `:''}${esc(e.tool)} — ${esc(e.text)}</li>`).join("");
+
+    // tree
+    const th=c.tree?renderTree(c.tree):"—";
+    if(th!==lastTree){lastTree=th;$("tree").innerHTML=th;applySel();}
+    refreshPreview();
+
+    const ban=$("banner");
+    if(d.stop_reason&&STOP[d.stop_reason]){const[k,txt]=STOP[d.stop_reason];ban.style.display="block";ban.style.borderLeftStyle=k==="done"?"solid":k==="err"?"double":"dashed";ban.innerHTML=`<b>${esc(txt)}</b>`;}
+    else ban.style.display="none";
+
+    setStatus(d.job_status,d.done);
+    $("ts").textContent=new Date().toLocaleTimeString();
+  }catch(e){if(Date.now()-lastOk>7000)setStatus("stale",false);}
+}
+tick();setInterval(tick,3000);
+</script>
+</body>
+</html>

@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Searchbox: budget-bounded closed-corpus QA</title>
+<meta name="description" content="Give a prompt, a zip, and an input-token budget. A self-hosted model in a Pi harness explores the corpus with local jina retrieval until the budget is spent, then answers fully cited." />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<meta name="theme-color" content="#000000" />
+<style>
+  :root{--bg:#fff;--fg:#000;--mut:#666;--line:#000;--soft:#e5e5e5;--fill:#f5f5f5}
+  @media (prefers-color-scheme: dark){:root{--bg:#000;--fg:#fff;--mut:#999;--line:#fff;--soft:#222;--fill:#111}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);overflow-x:hidden;
+    font-family:"Berkeley Mono",ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.5}
+  .wrap{max-width:820px;margin:0 auto;padding:48px 24px}
+  .masthead{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding-bottom:12px}
+  h1{font-size:15px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;margin:0}
+  p{color:var(--mut)}
+  .lede{color:var(--fg);margin-top:20px}
+  textarea{width:100%;min-height:80px;margin-top:8px;background:var(--bg);color:var(--fg);border:1px solid var(--line);padding:10px;font:inherit;resize:vertical}
+  .btn{border:1px solid var(--line);background:var(--fg);color:var(--bg);padding:8px 16px;cursor:pointer;font:inherit}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .field{margin-top:18px}
+  .lbl{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);margin-bottom:6px}
+  .fieldrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px}
+  .fieldrow .btn{margin-left:auto}
+  input[type=number]{width:120px;background:var(--bg);color:var(--fg);border:1px solid var(--line);padding:7px 8px;font:inherit}
+  input[type=file]{font:inherit;color:var(--mut)}
+  .jobs{margin-top:36px;border-top:1px solid var(--line);padding-top:16px}
+  .job{display:flex;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--soft);text-decoration:none;color:inherit}
+  .job:hover{background:var(--fill)}
+  .job .id{color:var(--mut);width:96px;flex:none}
+  .job .q{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .job .s{color:var(--mut);width:150px;text-align:right;flex:none;font-size:12px}
+  .dot{display:inline-block;width:7px;height:7px;border:1px solid var(--line);margin-right:5px}
+  .dot.on{background:var(--fg)}
+  .msg{margin-top:12px;color:var(--mut);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="masthead"><h1>Searchbox</h1><span style="color:var(--mut);font-size:11px">closed-corpus · budget-bounded</span></div>
+  <p class="lede">Give a prompt, a <b>.zip</b> corpus, and an <b>input-token budget</b>. A self-hosted model in a minimal Pi harness explores the corpus with local jina retrieval (v5-text-small + reranker-v3, no web) until it has spent the budget, then writes a fully-cited answer.</p>
+
+  <form id="f">
+    <div class="field">
+      <label class="lbl" for="prompt">Prompt</label>
+      <textarea id="prompt" placeholder="What question should be answered from the corpus?"></textarea>
+    </div>
+    <div class="field">
+      <label class="lbl" for="corpus">Corpus (.zip)</label>
+      <input type="file" id="corpus" accept=".zip" />
+    </div>
+    <div class="fieldrow">
+      <div>
+        <label class="lbl" for="budget">Input-token budget</label>
+        <input type="number" id="budget" value="300000" min="1000" step="10000" />
+      </div>
+      <button class="btn" type="submit" id="go">Run</button>
+    </div>
+  </form>
+  <div class="msg" id="msg"></div>
+
+  <div class="jobs">
+    <div class="lbl">Recent jobs</div>
+    <div id="jobs"><div class="msg">none yet</div></div>
+  </div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+$("f").addEventListener("submit",async e=>{
+  e.preventDefault();
+  const prompt=$("prompt").value.trim(), file=$("corpus").files[0], budget=parseInt($("budget").value,10);
+  if(prompt.length<5){$("msg").textContent="prompt too short";return;}
+  if(!file){$("msg").textContent="attach a .zip corpus";return;}
+  $("go").disabled=true;$("msg").textContent="uploading + queuing…";
+  const fd=new FormData();fd.append("prompt",prompt);fd.append("budget",budget);fd.append("corpus",file);
+  try{
+    const r=await fetch("/jobs",{method:"POST",body:fd});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||"error");
+    location.href=`/jobs/${d.job_id}/dashboard`;
+  }catch(err){$("msg").textContent="failed: "+(err.message||err);$("go").disabled=false;}
+});
+async function loadJobs(){
+  try{
+    const r=await fetch("/jobs",{cache:"no-store"});const d=await r.json();
+    const rows=(d.jobs||[]);
+    $("jobs").innerHTML=rows.length?rows.map(j=>{
+      const on=j.status==="running"||j.status==="done"?"on":"";
+      const pct=j.percent!=null?` · ${j.percent}%`:"";
+      return `<a class="job" href="/jobs/${j.job_id}/dashboard"><span class="id">${j.job_id}</span><span class="q">${(j.query||"—").replace(/[<>&]/g,'')}</span><span class="s"><span class="dot ${on}"></span>${j.status}${pct}</span></a>`;
+    }).join(""):'<div class="msg">none yet</div>';
+  }catch(e){}
+}
+loadJobs();setInterval(loadJobs,4000);
+</script>
+</body>
+</html>
