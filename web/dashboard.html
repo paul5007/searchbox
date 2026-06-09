@@ -80,8 +80,6 @@
   .prevcol{padding:14px 16px;min-width:0;overflow:hidden}
   .prev{margin-top:6px;max-height:min(50vh,640px);overflow:auto}
   .prev pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;line-height:1.5}
-  .ans{padding:14px 16px;border-bottom:1px solid var(--line)}
-  .ans .body{margin-top:6px;max-height:min(50vh,640px);overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12.5px;line-height:1.55}
   @media(max-width:760px){.hero{grid-template-columns:1fr}.hero>div{border-right:none;border-bottom:1px solid var(--line)}.split{grid-template-columns:1fr}.treecol{border-right:none;border-bottom:1px solid var(--line)}}
   .foot{display:flex;justify-content:space-between;color:var(--mut);font-size:11px;padding-top:12px}
   .actions{display:flex;gap:6px;padding:10px 0;border-bottom:1px solid var(--line)}
@@ -156,11 +154,6 @@
     </div>
   </div>
 
-  <div class="ans">
-    <div class="k">ANSWER.md <span id="ansN" class="sub" style="margin:0;text-transform:none;letter-spacing:0"></span></div>
-    <div class="body" id="ans"><div class="empty">no answer yet — agent is still exploring</div></div>
-  </div>
-
   <div class="panel">
     <div class="k">Activity</div>
     <ul class="feed" id="feed"><li class="empty">waiting for the agent…</li></ul>
@@ -193,6 +186,11 @@ function renderTree(node,prefix="",isLast=true,root=true,path=""){
   if(node.type==="dir"){out+=`${prefix}${branch}<span class="d">${esc(node.name)}/</span>\n`;const ch=node.children||[];const np=prefix+(isLast?"   ":"│  ");ch.forEach((c,i)=>out+=renderTree(c,np,i===ch.length-1,false,path+"/"+c.name));}
   else{out+=`${prefix}${branch}<span class="f" data-path="${esc(path)}">${esc(node.name)}</span> <span class="s">(${human(node.size)})</span>\n`;}
   return out;
+}
+function treeHasFile(node,name){
+  if(!node)return false;
+  if(node.type==="file")return node.name===name;
+  return (node.children||[]).some(c=>treeHasFile(c,name));
 }
 let selPath=null,selImg=false,lastPrev=null,lastTree=null;
 const IMG=["png","jpg","jpeg","gif","svg","webp"];
@@ -274,10 +272,8 @@ async function tick(){
     const dist=d.tool_distribution||{};const ks=Object.keys(dist);const max=Math.max(1,...Object.values(dist));
     $("dist").innerHTML=ks.length?ks.map(k=>`<div class="row"><span class="name">${esc(k)}</span><span class="track"><i style="width:${100*dist[k]/max}%"></i></span><span class="n">${dist[k]}</span></div>`).join(""):'<div class="empty">no calls yet</div>';
 
-    // answer
-    const am=d.answer_md||"";
-    $("ansN").textContent=am?`(${am.length.toLocaleString()} chars)`:"";
-    $("ans").innerHTML=am?esc(am):'<div class="empty">no answer yet — agent is still exploring</div>';
+    // ANSWER.md auto-opens in the preview pane once present (it is also a tree node)
+    if(!selPath && d.corpus && treeHasFile(d.corpus.tree,"ANSWER.md"))loadPreview("ANSWER.md");
 
     // activity
     const rec=d.recent||[];let pt=null;

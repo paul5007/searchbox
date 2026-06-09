@@ -202,15 +202,23 @@ _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
         ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp"}
 
 
+# Tree paths from /stats are relative to the job dir (root labeled 'output'), so resolve
+# there. Block the internal plumbing files from being fetched even by direct URL.
+_FILE_HIDE = {"input.zip", "pi.log", "corpus.log", "orchestrator.log", "meta.json",
+              "run_meta.json", "control", "query.txt"}
+
+
 @app.get("/jobs/{job_id}/file")
 def get_file(job_id: str, path: str):
-    # Tree paths from /stats are relative to the job's corpus/ dir, so resolve there.
-    base = (JOBS / job_id / "corpus").resolve()
+    base = (JOBS / job_id).resolve()
     target = (base / path).resolve()
     try:
-        target.relative_to(base)
+        rel = target.relative_to(base)
     except ValueError:
-        raise HTTPException(403, "outside corpus dir")
+        raise HTTPException(403, "outside job dir")
+    parts = rel.parts
+    if parts and (parts[0] in (".pi-agent", ".corpus_cache") or parts[-1] in _FILE_HIDE):
+        raise HTTPException(404, "not found")
     if not target.is_file():
         raise HTTPException(404, "not found")
     ext = target.suffix.lower()

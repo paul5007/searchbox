@@ -50,6 +50,13 @@ def session_usage(job_dir: Path) -> dict:
     return out
 
 
+# Job-internal plumbing the file tree should not surface (logs, configs, the raw upload,
+# the pi agent + embedding cache dirs). Everything else (corpus/, ANSWER.md, NOTES.md, any
+# scratch the agent writes) shows up in the tree.
+_HIDE = {".pi-agent", ".corpus_cache", "input.zip", "pi.log", "corpus.log",
+         "orchestrator.log", "meta.json", "run_meta.json", "query.txt", "control", "answer.zip"}
+
+
 def _walk_tree(root: Path):
     total = 0
 
@@ -58,7 +65,7 @@ def _walk_tree(root: Path):
         if p.is_dir():
             ch = []
             for c in sorted(p.iterdir(), key=lambda x: (x.is_file(), x.name)):
-                if c.name.startswith(".corpus_cache") or c.name.startswith(".pi-agent"):
+                if c.name in _HIDE or c.name.startswith("."):
                     continue
                 ch.append(node(c))
             return {"name": p.name, "type": "dir", "children": ch}
@@ -169,7 +176,11 @@ def parse_pi_log(log_path: Path) -> dict:
 
 def job_stats(job_dir: Path, budget: int = None) -> dict:
     corpus = job_dir / "corpus"
-    tree, size = _walk_tree(corpus)
+    # Walk the whole job dir so the agent's outputs (ANSWER.md, NOTES.md, any scratch) appear
+    # in the tree next to corpus/, not just the read-only corpus. Internal plumbing is hidden
+    # by _walk_tree. Relabel the root to 'output' so it reads as the job's working dir.
+    tree, size = _walk_tree(job_dir)
+    tree["name"] = "output"
     log = parse_pi_log(job_dir / "pi.log")
     usage = session_usage(job_dir)
     spent = usage.get(BUDGET_METRIC, 0)

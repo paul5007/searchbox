@@ -93,6 +93,18 @@ def wait_http(url: str, timeout: int = 600) -> bool:
     return False
 
 
+def _strip_single_wrapper(corpus_dir: Path):
+    """If everything sits under one top-level folder (the common zip wrapper, e.g. a GitHub
+    `repo-main/` or a hand-made `corpus/`), hoist its contents up one level so the corpus root
+    is the real content, not a redundant nesting."""
+    entries = [p for p in corpus_dir.iterdir() if not p.name.startswith(".")]
+    if len(entries) == 1 and entries[0].is_dir():
+        inner = entries[0]
+        for item in list(inner.iterdir()):
+            shutil.move(str(item), str(corpus_dir / item.name))
+        inner.rmdir()
+
+
 def prepare_corpus(src: Path, corpus_dir: Path):
     corpus_dir.mkdir(parents=True, exist_ok=True)
     if src.is_dir():
@@ -102,6 +114,7 @@ def prepare_corpus(src: Path, corpus_dir: Path):
                 shutil.copytree(item, dst, dirs_exist_ok=True)
             else:
                 shutil.copy2(item, dst)
+        _strip_single_wrapper(corpus_dir)
         return
     if src.is_file() and zipfile.is_zipfile(src):
         base = corpus_dir.resolve()
@@ -110,6 +123,7 @@ def prepare_corpus(src: Path, corpus_dir: Path):
                 tgt = (corpus_dir / member).resolve()
                 if str(tgt).startswith(str(base)):
                     z.extract(member, corpus_dir)
+        _strip_single_wrapper(corpus_dir)
         return
     raise SystemExit(f"ERROR: corpus must be a .zip or a folder: {src}")
 
