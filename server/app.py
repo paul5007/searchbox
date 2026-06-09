@@ -181,7 +181,7 @@ def stats_ep(job_id: str):
         raise HTTPException(404, "unknown job")
     with _lock:
         meta = dict(_jobs.get(job_id, {})) or _load_meta(job_id)
-    s = job_stats(job_dir, meta.get("budget"))
+    s = job_stats(job_dir, meta.get("budget"), live=(meta.get("status") == "running"))
     s["job_id"] = job_id
     s["job_status"] = meta.get("status") or "unknown"
     s["query"] = meta.get("query", "")

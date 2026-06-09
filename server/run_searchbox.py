@@ -224,6 +224,46 @@ def drive(job_dir, agent_dir, corpus_dir, args, budget):
     global_wd = threading.Timer(args.max_seconds + 30, lambda: hard_kill("ceiling_seconds"))
     global_wd.start()
 
+    # Wall-clock timing accumulators. pi emits no timing/tps (verified against source), so we
+    # stopwatch its event stream here: LLM busy = message_start..message_end, tool busy =
+    # tool_execution_start..tool_execution_end. Per-tool totals power the UI breakdown.
+    timing = {"llm_ms": 0.0, "tool_ms": 0.0, "by_tool_ms": {}, "by_tool_n": {}}
+    tmark = {"msg": None, "tool": {}}
+    timing_path = job_dir / "timing.json"
+
+    def record_timing(line: str):
+        now = time.time() * 1000.0
+        try:
+            if '"type":"message_start"' in line:
+                tmark["msg"] = now
+            elif '"type":"message_end"' in line:
+                if tmark["msg"] is not None:
+                    timing["llm_ms"] += now - tmark["msg"]; tmark["msg"] = None
+            elif '"type":"tool_execution_start"' in line:
+                ev = json.loads(line)
+                tmark["tool"][ev.get("toolCallId", "")] = (now, ev.get("toolName", "?"))
+            elif '"type":"tool_execution_end"' in line:
+                ev = json.loads(line)
+                cid = ev.get("toolCallId", "")
+                st = tmark["tool"].pop(cid, None)
+                if st:
+                    dur, name = now - st[0], st[1]
+                    timing["tool_ms"] += dur
+                    timing["by_tool_ms"][name] = timing["by_tool_ms"].get(name, 0.0) + dur
+                    timing["by_tool_n"][name] = timing["by_tool_n"].get(name, 0) + 1
+        except Exception:
+            pass
+
+    def flush_timing(wall_ms):
+        try:
+            out = {"wall_ms": wall_ms, "llm_ms": round(timing["llm_ms"]),
+                   "tool_ms": round(timing["tool_ms"]),
+                   "by_tool_ms": {k: round(v) for k, v in timing["by_tool_ms"].items()},
+                   "by_tool_n": timing["by_tool_n"]}
+            timing_path.write_text(json.dumps(out))
+        except Exception:
+            pass
+
     start = time.time()
     turn, stop_reason = 0, "error_pi_exited"
     sfile = None
@@ -250,10 +290,12 @@ def drive(job_dir, agent_dir, corpus_dir, args, budget):
                     if '"type":"message_update"' in line:
                         continue
                     log.write(line)
+                    record_timing(line)
                     if '"type":"agent_end"' in line:
                         ended = True; break
             finally:
                 cycle_wd.cancel()
+            flush_timing(round((time.time() - start) * 1000))
 
             if not ended:
                 stop_reason = hard["reason"] or "error_pi_exited"; break
@@ -308,6 +350,7 @@ def drive(job_dir, agent_dir, corpus_dir, args, budget):
             except Exception:
                 pass
         log.flush()
+        flush_timing(round((time.time() - start) * 1000))
 
     _, usage = spent_now()
     return turn, stop_reason, usage

@@ -56,7 +56,7 @@
   .row .name{width:140px;max-width:45%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .row .track{flex:1;height:10px;border:1px solid var(--line);position:relative}
   .row .track > i{position:absolute;left:0;top:0;bottom:0;background:var(--fill)}
-  .row .n{width:34px;text-align:right;color:var(--mut)}
+  .row .n{min-width:34px;text-align:right;color:var(--mut);white-space:nowrap;padding-left:6px}
   .tbl{width:100%;border-collapse:collapse;margin-top:4px;font-size:12px}
   .tbl td{padding:2px 0}
   .tbl td.v{text-align:right}
@@ -149,7 +149,21 @@
       <div class="sub"><span id="csize">0 B</span> · files indexed</div>
     </div>
     <div class="cell">
-      <div class="k">Tool distribution</div>
+      <div class="k">Throughput</div>
+      <div class="big"><span id="tps">-</span> <span style="font-size:13px;color:var(--mut)">tok/s</span></div>
+      <div class="sub">decode · prefill <span id="pps">-</span> tok/s</div>
+      <div class="sub" id="gen"></div>
+    </div>
+    <div class="cell">
+      <div class="k">Wall time</div>
+      <div class="big" id="wall">0s</div>
+      <table class="tbl">
+        <tr><td>LLM</td><td class="v"><span id="llmT">0s</span> <span id="llmP" class="sub" style="margin:0"></span></td></tr>
+        <tr><td>tools</td><td class="v"><span id="toolT">0s</span> <span id="toolP" class="sub" style="margin:0"></span></td></tr>
+      </table>
+    </div>
+    <div class="cell">
+      <div class="k">Tool distribution <span class="sub" style="margin:0;text-transform:none;letter-spacing:0">calls · time</span></div>
       <div class="dist" id="dist"><div class="empty">no calls yet</div></div>
     </div>
   </div>
@@ -178,6 +192,7 @@ const JOB="__JOB_ID__";
 const $=id=>document.getElementById(id);
 let lastOk=0;
 function human(b){if(b<1024)return b+" B";const u=["KB","MB","GB"];let i=-1;do{b/=1024;i++}while(b>=1024&&i<2);return b.toFixed(b<10?1:0)+" "+u[i];}
+function dur(ms){ms=ms||0;const s=ms/1000;if(s<60)return s.toFixed(s<10?1:0)+"s";const m=Math.floor(s/60),r=Math.round(s%60);return m+"m"+(r?" "+r+"s":"");}
 function esc(s){return String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
 function renderTree(node,prefix="",isLast=true,root=true,path=""){
   let out="";
@@ -269,8 +284,22 @@ async function tick(){
     $("cfiles").textContent=c.file_count||0;
     $("csize").textContent=human(c.size_bytes||0);
 
+    // throughput (llama metrics; '-' when down/not live, not a misleading 0)
+    const tps=d.tps||{};
+    $("tps").textContent=(tps.decode!=null?tps.decode:"-");
+    $("pps").textContent=(tps.prefill!=null?tps.prefill:"-");
+    $("gen").innerHTML=live?'<span class="dot on blink"></span>running':'<span class="dot"></span>idle';
+
+    // wall time breakdown (wall / LLM / tool, with % of wall)
+    const tm=d.timing||{};const wall=tm.wall_ms||0;
+    $("wall").textContent=dur(wall);
+    $("llmT").textContent=dur(tm.llm_ms||0);$("llmP").textContent=wall?`(${Math.round(100*(tm.llm_ms||0)/wall)}%)`:"";
+    $("toolT").textContent=dur(tm.tool_ms||0);$("toolP").textContent=wall?`(${Math.round(100*(tm.tool_ms||0)/wall)}%)`:"";
+
+    // tool distribution: bar = call count, suffix = calls + cumulative time per tool
     const dist=d.tool_distribution||{};const ks=Object.keys(dist);const max=Math.max(1,...Object.values(dist));
-    $("dist").innerHTML=ks.length?ks.map(k=>`<div class="row"><span class="name">${esc(k)}</span><span class="track"><i style="width:${100*dist[k]/max}%"></i></span><span class="n">${dist[k]}</span></div>`).join(""):'<div class="empty">no calls yet</div>';
+    const btm=tm.by_tool_ms||{};
+    $("dist").innerHTML=ks.length?ks.map(k=>{const t=btm[k]?` · ${dur(btm[k])}`:"";return `<div class="row"><span class="name">${esc(k)}</span><span class="track"><i style="width:${100*dist[k]/max}%"></i></span><span class="n">${dist[k]}${t}</span></div>`;}).join(""):'<div class="empty">no calls yet</div>';
 
     // ANSWER.md auto-opens in the preview pane once present (it is also a tree node)
     if(!selPath && d.corpus && treeHasFile(d.corpus.tree,"ANSWER.md"))loadPreview("ANSWER.md");

@@ -4,10 +4,45 @@
 Token totals come from the append-only Pi session JSONL (compaction-safe; see run_searchbox.py),
 using the same fields Pi uses (input/output/cacheRead/cacheWrite). The BUDGET is `input`.
 """
-import json, os, re
+import json, os, re, urllib.request
 from pathlib import Path
 
 BUDGET_METRIC = os.environ.get("BUDGET_METRIC", "input")
+LLAMA_URL = os.environ.get("LLAMA_URL", "http://127.0.0.1:8080")
+
+
+def llama_tps() -> dict:
+    """Live throughput from llama.cpp Prometheus /metrics (needs --metrics). pi reports no tps,
+    so this is the speed source (same as dataroom). Only meaningful while this job is the one
+    actively running on the shared llama-server."""
+    out = {}
+    try:
+        with urllib.request.urlopen(f"{LLAMA_URL}/metrics", timeout=3) as r:
+            for line in r.read().decode(errors="ignore").splitlines():
+                if line.startswith("#") or " " not in line:
+                    continue
+                k, v = line.rsplit(" ", 1)
+                try:
+                    val = float(v)
+                except ValueError:
+                    continue
+                if k == "llamacpp:predicted_tokens_seconds":
+                    out["decode"] = round(val, 1)
+                elif k == "llamacpp:prompt_tokens_seconds":
+                    out["prefill"] = round(val, 1)
+    except Exception:
+        pass
+    return out
+
+
+def read_timing(job_dir: Path) -> dict:
+    p = job_dir / "timing.json"
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except Exception:
+            pass
+    return {"wall_ms": 0, "llm_ms": 0, "tool_ms": 0, "by_tool_ms": {}, "by_tool_n": {}}
 
 
 def _session_file(job_dir: Path):
@@ -174,7 +209,7 @@ def parse_pi_log(log_path: Path) -> dict:
     }
 
 
-def job_stats(job_dir: Path, budget: int = None) -> dict:
+def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
     corpus = job_dir / "corpus"
     # Walk the whole job dir so the agent's outputs (ANSWER.md, NOTES.md, any scratch) appear
     # in the tree next to corpus/, not just the read-only corpus. Internal plumbing is hidden
@@ -218,6 +253,8 @@ def job_stats(job_dir: Path, budget: int = None) -> dict:
         "corpus": {"tree": tree, "size_bytes": size,
                    "file_count": sum(1 for p in corpus.rglob("*") if p.is_file()) if corpus.exists() else 0},
         "answer_md": answer,
+        "timing": read_timing(job_dir),
+        "tps": llama_tps() if live else {},
         "stop_reason": stop_reason,
         "done": done,
         "zip_ready": (job_dir / "answer.zip").exists(),
