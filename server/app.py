@@ -204,12 +204,13 @@ _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 
 @app.get("/jobs/{job_id}/file")
 def get_file(job_id: str, path: str):
-    base = (JOBS / job_id).resolve()
+    # Tree paths from /stats are relative to the job's corpus/ dir, so resolve there.
+    base = (JOBS / job_id / "corpus").resolve()
     target = (base / path).resolve()
     try:
         target.relative_to(base)
     except ValueError:
-        raise HTTPException(403, "outside job dir")
+        raise HTTPException(403, "outside corpus dir")
     if not target.is_file():
         raise HTTPException(404, "not found")
     ext = target.suffix.lower()
