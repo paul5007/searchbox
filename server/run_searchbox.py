@@ -267,6 +267,39 @@ def drive(job_dir, work_dir, agent_dir, corpus_dir, args, budget):
         except Exception:
             pass
 
+    # Per-turn snapshots live in job_dir/snapshots (OUTSIDE work/, so pi's sandbox can't see
+    # them - this is meta/experiment data, not corpus). Each turn we record the current
+    # ANSWER.md as ANSWER-t{turn}.md and append one token/usage row to turns.jsonl.
+    snap_dir = job_dir / "snapshots"
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    turns_jsonl = snap_dir / "turns.jsonl"
+
+    def snapshot(turn_no: int, spent: int, usage: dict, elapsed: float):
+        try:
+            ans = work_dir / "ANSWER.md"
+            ans_chars = 0
+            if ans.exists():
+                body = ans.read_text(errors="ignore")
+                ans_chars = len(body)
+                (snap_dir / f"ANSWER-t{turn_no}.md").write_text(body)
+            row = {
+                "turn": turn_no,
+                "ts": round(time.time(), 3),
+                "elapsed_seconds": round(elapsed, 1),
+                "budget": budget,
+                "budget_metric": BUDGET_METRIC,
+                "spent": spent,
+                "budget_pct": round(100 * spent / budget, 2) if budget else None,
+                "tokens": usage,
+                "tool_calls": count_tool_calls(log_path),
+                "answer_present": answer_present(work_dir),
+                "answer_chars": ans_chars,
+            }
+            with open(turns_jsonl, "a") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except Exception:
+            pass
+
     start = time.time()
     turn, stop_reason = 0, "error_pi_exited"
     sfile = None
@@ -315,6 +348,7 @@ def drive(job_dir, work_dir, agent_dir, corpus_dir, args, budget):
 
             spent, usage = spent_now()
             elapsed = time.time() - start
+            snapshot(turn, spent, usage, elapsed)
             print(f"[searchbox] cycle {turn} {BUDGET_METRIC}={spent}/{budget} "
                   f"({round(100*spent/budget,1) if budget else 0}%) "
                   f"tools={count_tool_calls(log_path)} ans={answer_present(work_dir)}", flush=True)

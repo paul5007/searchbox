@@ -270,6 +270,29 @@ def _session_file(job_id: str) -> Path | None:
     return files[0] if files else None
 
 
+@app.get("/jobs/{job_id}/snapshots.zip")
+def snapshots_zip(job_id: str):
+    """Per-turn experiment data: every ANSWER-t{n}.md snapshot + turns.jsonl (token usage per
+    turn). Built on the fly into a zip. These live in job_dir/snapshots (outside work/), so the
+    pi sandbox never sees them."""
+    import io, zipfile
+    snap_dir = JOBS / job_id / "snapshots"
+    if not snap_dir.exists() or not any(snap_dir.iterdir()):
+        raise HTTPException(404, "no snapshots yet")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(snap_dir.iterdir()):
+            if f.is_file():
+                z.write(str(f), arcname=f"snapshots-{job_id}/{f.name}")
+    buf.seek(0)
+    from fastapi.responses import Response
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="snapshots-{job_id}.zip"'},
+    )
+
+
 @app.get("/jobs/{job_id}/trace.jsonl")
 def trace_jsonl(job_id: str):
     """The complete native Pi trace: the session JSONL (every message, tool call, and thinking
