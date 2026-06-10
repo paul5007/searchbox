@@ -54,7 +54,7 @@
       <textarea id="prompt" placeholder="What question should be answered from the corpus?"></textarea>
     </div>
     <div class="field">
-      <label class="lbl" for="corpus">Corpus (.zip)</label>
+      <label class="lbl" for="corpus">Corpus (.zip) <span style="text-transform:none;letter-spacing:0">— optional; defaults to the Jina corpus (blogs + papers + model cards)</span></label>
       <input type="file" id="corpus" accept=".zip" />
     </div>
     <div class="fieldrow">
@@ -78,9 +78,9 @@ $("f").addEventListener("submit",async e=>{
   e.preventDefault();
   const prompt=$("prompt").value.trim(), file=$("corpus").files[0], budget=parseInt($("budget").value,10);
   if(prompt.length<5){$("msg").textContent="prompt too short";return;}
-  if(!file){$("msg").textContent="attach a .zip corpus";return;}
-  $("go").disabled=true;$("msg").textContent="uploading + queuing…";
-  const fd=new FormData();fd.append("prompt",prompt);fd.append("budget",budget);fd.append("corpus",file);
+  $("go").disabled=true;$("msg").textContent="queuing…";
+  const fd=new FormData();fd.append("prompt",prompt);fd.append("budget",budget);
+  if(file)fd.append("corpus",file);
   try{
     const r=await fetch("/jobs",{method:"POST",body:fd});
     const d=await r.json();

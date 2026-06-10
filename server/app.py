@@ -109,8 +109,15 @@ def health():
     return {"ok": True}
 
 
+# Default corpus used when the frontend submits no zip. It is treated exactly like an uploaded
+# zip (copied to input.zip, NOT pre-extracted) so the default path is end-to-end identical.
+DEFAULT_CORPUS = Path(os.environ.get(
+    "DEFAULT_CORPUS", str(HERE.parent / "data" / "default-corpus.zip")))
+
+
 @app.post("/jobs")
-async def create(prompt: str = Form(...), budget: int = Form(...), corpus: UploadFile = File(...)):
+async def create(prompt: str = Form(...), budget: int = Form(...),
+                 corpus: UploadFile | None = File(None)):
     prompt = (prompt or "").strip()
     if len(prompt) < 5:
         raise HTTPException(400, "prompt too short")
@@ -119,11 +126,18 @@ async def create(prompt: str = Form(...), budget: int = Form(...), corpus: Uploa
     job_id = uuid.uuid4().hex[:12]
     job_dir = JOBS / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
-    data = await corpus.read()
+    if corpus is not None and corpus.filename:
+        data = await corpus.read()
+        corpus_name = corpus.filename
+    else:
+        if not DEFAULT_CORPUS.exists():
+            raise HTTPException(400, "no corpus uploaded and no default corpus configured")
+        data = DEFAULT_CORPUS.read_bytes()
+        corpus_name = DEFAULT_CORPUS.name
     (job_dir / "input.zip").write_bytes(data)
     with _cond:
         _jobs[job_id] = {"status": "queued", "query": prompt, "budget": budget,
-                         "corpus_name": corpus.filename, "corpus_bytes": len(data),
+                         "corpus_name": corpus_name, "corpus_bytes": len(data),
                          "submitted": time.time()}
         _queue.append(job_id)
         _cond.notify_all()
