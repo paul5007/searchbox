@@ -373,22 +373,21 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
             if turn >= args.max_turns:
                 stop_reason = "ceiling_turns"; break
 
-            # Force-budget OFF: stop after the model's first turn ends - but only once ANSWER.md
-            # exists. If the model finished a turn without writing the answer, push the write
-            # prompt and let it run another turn; stop as soon as the answer is present.
-            if not args.force_budget:
-                if answer_present(work_dir):
-                    stop_reason = "first_turn_done"; break
+            # EVERY turn, regardless of force-budget: if the model has not written ANSWER.md yet,
+            # always push the write prompt and run another turn. We never stop without an answer.
+            if not answer_present(work_dir):
                 send({"type": "prompt", "message":
                       "Write your answer to ANSWER.md now."})
                 continue
 
+            # ANSWER.md exists from here on.
+            # Force-budget OFF: one natural pass is enough -> stop as soon as the answer is in.
+            if not args.force_budget:
+                stop_reason = "first_turn_done"; break
+
+            # Force-budget ON: keep going until the input-token budget is spent.
             if spent >= budget:
-                if answer_present(work_dir):
-                    stop_reason = "budget_spent"; break
-                send({"type": "prompt", "message":
-                      "Write your answer to ANSWER.md now."})
-                continue
+                stop_reason = "budget_spent"; break
 
             send({"type": "prompt", "message": KEEP_GOING.format(spent=spent, budget=budget)})
     except KeyboardInterrupt:
