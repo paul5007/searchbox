@@ -76,7 +76,7 @@ Everything is an env knob — no code edits:
 
 | Knob | Ablates |
 | --- | --- |
-| `SEARCHBOX_TOOLS` | tools the model gets: `sentence_embed,passage_rerank` / `sentence_embed` / `passage_rerank` / `` (none) |
+| `SEARCHBOX_TOOLS` | tools the model gets. Unset => default `sentence_embed,passage_rerank`. Set explicitly to pick, e.g. `sentence_embed` / `passage_rerank` / `` (none). Opt-in `semantic_search` (high-level embed->rank->top-k pipeline) is kept in the repo but only loads when listed here, e.g. `semantic_search,passage_rerank`. |
 | `LLAMA_URL` + `MODEL_ID` + `CONTEXT_WINDOW` | the base LLM |
 | `EMBED_MODEL` / `RERANK_MODEL` | the retrieval models |
 | `INPUT_TOKEN_BUDGET` | the budget |
