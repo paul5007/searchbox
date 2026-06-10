@@ -159,7 +159,7 @@ def _summarize(tool: str, args) -> str:
 def parse_pi_log(log_path: Path) -> dict:
     tool_counts, tool_calls = {}, 0
     turns = steps = compactions = 0
-    recent, errors = [], []
+    recent, errors, calls = [], [], []
     for ev in _iter_events(log_path):
         t = ev.get("type")
         if t == "_session_start":
@@ -175,7 +175,19 @@ def parse_pi_log(log_path: Path) -> dict:
             name = ev.get("toolName") or "unknown"
             tool_counts[name] = tool_counts.get(name, 0) + 1
             tool_calls += 1
-            recent.append({"turn": turns, "tool": name, "text": _summarize(name, ev.get("args"))})
+            args = ev.get("args") or {}
+            recent.append({"turn": turns, "tool": name, "text": _summarize(name, args)})
+            # full per-call log (every tool call, full args) for the calls panel
+            detail = {"n": tool_calls, "turn": turns, "tool": name}
+            if name == "bash":
+                detail["command"] = re.sub(r"\s+", " ", str(args.get("command") or args.get("cmd") or "")).strip()
+            elif name in ("semantic_search", "passage_rerank"):
+                detail["query"] = str(args.get("query", ""))
+                if args.get("paths"):
+                    detail["paths"] = [os.path.basename(str(p)) for p in args["paths"]]
+            elif name in ("read", "write", "edit"):
+                detail["path"] = str(args.get("path") or args.get("file") or "")
+            calls.append(detail)
         elif t == "tool_execution_end":
             res = ev.get("result") or {}
             is_err = ev.get("isError") or (isinstance(res, dict) and res.get("isError"))
@@ -206,6 +218,7 @@ def parse_pi_log(log_path: Path) -> dict:
         "tool_distribution": dict(sorted(tool_counts.items(), key=lambda kv: -kv[1])),
         "turns": turns, "steps": steps, "compactions": compactions,
         "recent": recent, "errors": errors,
+        "calls": calls[-200:],
     }
 
 

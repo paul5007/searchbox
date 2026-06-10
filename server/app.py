@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
 import uvicorn
 
-from server.stats import job_stats
+from server.stats import job_stats, session_usage, BUDGET_METRIC
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE.parent / "web"
@@ -162,11 +162,21 @@ def list_jobs():
         spent = pct = 0
         bdg = meta.get("budget")
         if rm.exists():
+            # finished job: authoritative final numbers from run_meta
             try:
                 m = json.loads(rm.read_text())
                 spent = m.get("input_tokens_spent", 0)
                 bdg = bdg or m.get("budget")
                 pct = m.get("budget_pct") or 0
+            except Exception:
+                pass
+        else:
+            # running/queued: read live spend from the append-only session file so the homepage
+            # progress bar tracks in real time (run_meta only exists once the job ends).
+            try:
+                spent = session_usage(job_dir).get(BUDGET_METRIC, 0)
+                if bdg:
+                    pct = round(min(100, 100 * spent / bdg), 1)
             except Exception:
                 pass
         rows.append({"job_id": jid, "status": meta.get("status", "unknown"),
