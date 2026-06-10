@@ -61,7 +61,8 @@ def _run_one(job_id: str):
            "--out", str(job_dir), "--budget", str(meta["budget"])]
     env = dict(os.environ)
     for k in ("SEARCHBOX_TOOLS", "LLAMA_URL", "MODEL_ID", "CONTEXT_WINDOW",
-              "EMBED_MODEL", "RERANK_MODEL", "BUDGET_METRIC"):
+              "EMBED_MODEL", "RERANK_MODEL", "BUDGET_METRIC",
+              "EMBED_BACKEND", "RERANK_BACKEND", "API_EMBED_MODEL", "API_RERANK_MODEL"):
         if meta.get(k):
             env[k] = str(meta[k])
     log = open(job_dir / "orchestrator.log", "a")

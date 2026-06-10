@@ -23,13 +23,24 @@ Endpoints (POST JSON):
 import os, json, glob, hashlib, time
 import numpy as np
 from fastapi import FastAPI, Request
+import urllib.request
 import uvicorn
 
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
-# Keep the embedder/reranker off the GPU by default so the LLM owns VRAM (mirrors dataroom's
-# EMBED_DEVICE=cpu rationale; jina-v5 base+LoRA adapters otherwise OOM a tight card). Set
-# EMBED_DEVICE=cuda to move them onto the GPU when there is headroom.
+# Backend per model: "local" (self-hosted weights) or "api" (Jina cloud, https://api.jina.ai).
+# This is invisible to the agent - the tools and their outputs are identical either way; only
+# this env decides where the embed/rerank actually runs. Clean ablation axis: local vs api.
+EMBED_BACKEND = os.environ.get("EMBED_BACKEND", "local").lower()
+RERANK_BACKEND = os.environ.get("RERANK_BACKEND", "local").lower()
+JINA_API_KEY = os.environ.get("JINA_API_KEY", "")
+JINA_API_BASE = os.environ.get("JINA_API_BASE", "https://api.jina.ai/v1")
+# Model ids differ by backend: local uses HF repo ids, api uses Jina model names.
+API_EMBED_MODEL = os.environ.get("API_EMBED_MODEL", "jina-embeddings-v5-text-small")
+API_RERANK_MODEL = os.environ.get("API_RERANK_MODEL", "jina-reranker-v3")
+
+# Keep the LOCAL embedder/reranker off the GPU by default so the LLM owns VRAM (jina-v5
+# base+LoRA otherwise OOM a tight card). Set EMBED_DEVICE=cuda when there is headroom.
 EMBED_DEVICE = os.environ.get("EMBED_DEVICE", "cpu")
 if EMBED_DEVICE.startswith("cpu"):
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
@@ -40,6 +51,16 @@ RERANK_MODEL = os.environ.get("RERANK_MODEL", "jinaai/jina-reranker-v3")
 EMBED_TASK = os.environ.get("EMBED_TASK", "retrieval")
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1400"))
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "180"))
+
+
+def _api_post(path: str, payload: dict) -> dict:
+    req = urllib.request.Request(
+        f"{JINA_API_BASE}/{path}",
+        data=json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {JINA_API_KEY}",
+                 "Content-Type": "application/json", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.load(r)
 
 # Text-like files we will index. Binary/asset files are skipped (the agent can still `read`
 # or `bash` them directly). Extendable via CORPUS_GLOBS (comma-separated globs).
@@ -100,10 +121,30 @@ def rerank_model():
     return _rerank_model
 
 
+def _encode_api(texts, role: str) -> np.ndarray:
+    """Encode via Jina cloud embeddings API. Same v5 retrieval task, asymmetric query/passage."""
+    task = "retrieval.query" if role == "query" else "retrieval.passage"
+    out = []
+    B = 128
+    for i in range(0, len(texts), B):
+        d = _api_post("embeddings", {"model": API_EMBED_MODEL, "task": task,
+                                     "input": list(texts[i:i + B])})
+        rows = sorted(d["data"], key=lambda r: r.get("index", 0))
+        out.extend(r["embedding"] for r in rows)
+    arr = np.asarray(out, dtype=np.float32)
+    # API returns unnormalized; L2-normalize so cosine == dot, matching the local path.
+    if arr.size:
+        arr /= (np.linalg.norm(arr, axis=1, keepdims=True) + 1e-12)
+    return arr
+
+
 def _encode(texts, role: str) -> np.ndarray:
     """Encode with the retrieval adapter + role-specific prompt (query vs document).
 
+    Routes to the Jina cloud API when EMBED_BACKEND=api; otherwise the local model.
     Degrades gracefully if a build lacks the named prompts (older/odd v5 packaging)."""
+    if EMBED_BACKEND == "api":
+        return _encode_api(texts, role)
     m = embed_model()
     wants = ["query"] if role == "query" else ["document", "passage"]
     available = set((getattr(m, "prompts", None) or {}).keys())
@@ -241,9 +282,20 @@ async def rerank(req: Request):
     top_n = body.get("top_n")
     if not q or not docs:
         return {"results": []}
+    docs = list(docs)
+    if RERANK_BACKEND == "api":
+        payload = {"model": API_RERANK_MODEL, "query": q, "documents": docs}
+        if top_n is not None:
+            payload["top_n"] = int(top_n)
+        d = _api_post("rerank", payload)
+        out = [{"score": round(float(r.get("relevance_score", 0.0)), 4),
+                "text": (r.get("document") or {}).get("text", "") if isinstance(r.get("document"), dict)
+                        else r.get("document", ""),
+                "index": int(r.get("index", -1))} for r in d.get("results", [])]
+        return {"results": out}
     m = rerank_model()
     kwargs = {"top_n": int(top_n)} if top_n is not None else {}
-    ranked = m.rerank(q, list(docs), **kwargs)
+    ranked = m.rerank(q, docs, **kwargs)
     out = [{"score": round(float(r.get("relevance_score", 0.0)), 4),
             "text": r.get("document", ""), "index": int(r.get("index", -1))} for r in ranked]
     return {"results": out}
@@ -255,7 +307,9 @@ async def stats(_: Request):
     files = sorted(os.path.relpath(f, CORPUS_DIR) for f in _corpus_files())
     return {"files": files, "file_count": len(files),
             "embedded_scopes": len(_scope_cache),
-            "embed_model": EMBED_MODEL, "rerank_model": RERANK_MODEL,
+            "embed_backend": EMBED_BACKEND, "rerank_backend": RERANK_BACKEND,
+            "embed_model": API_EMBED_MODEL if EMBED_BACKEND == "api" else EMBED_MODEL,
+            "rerank_model": API_RERANK_MODEL if RERANK_BACKEND == "api" else RERANK_MODEL,
             "corpus_dir": CORPUS_DIR}
 
 
