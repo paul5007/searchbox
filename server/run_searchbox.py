@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Orchestrator: run one searchbox job on a minimal Pi harness.
 
-Inputs: a PROMPT, a CORPUS (.zip or folder), an INPUT-TOKEN BUDGET.
-The agent answers the prompt grounded ONLY in the corpus, using two local-only retrieval tools
-(jina-embeddings-v5-text-small + jina-reranker-v3 over the corpus). No web.
+Inputs: a PROMPT, a DATAROOM (.zip or folder), an INPUT-TOKEN BUDGET.
+The agent answers the prompt grounded ONLY in the dataroom, using two local-only retrieval tools
+(jina-embeddings-v5-text-small + jina-reranker-v3 over the dataroom). No web.
 
 DESIGN: keep it minimal. Pi is already a complete agent (it loops, calls tools, and
 auto-compacts its own context). We add exactly ONE thing on top of vanilla Pi: do not let the
 run finish until it has SPENT the input-token budget. So this file only:
-  1. unzips the corpus + boots the retrieval sidecar,
+  1. unzips the dataroom + boots the retrieval sidecar,
   2. sends the task once,
   3. re-nudges ("keep going") each time Pi goes idle while the budget is unspent,
   4. stops when budget is spent and ANSWER.md exists.
@@ -68,16 +68,16 @@ def write_pi_config(agent_dir: Path, llama_url: str):
     }, indent=2))
 
 
-def boot_corpus(job_dir: Path, corpus_dir: Path, port: int) -> subprocess.Popen:
+def boot_dataroom(job_dir: Path, dataroom_dir: Path, port: int) -> subprocess.Popen:
     env = dict(os.environ)
-    env["CORPUS_DIR"] = str(corpus_dir)
-    env["CORPUS_PORT"] = str(port)
-    env["CORPUS_CACHE_DIR"] = str(job_dir / ".corpus_cache")
-    # /embed writes jsonl here; this is pi's cwd (parent of corpus/), readable by the model.
-    env["WORK_DIR"] = str(corpus_dir.parent)
-    logf = open(job_dir / "corpus.log", "a")
-    logf.write(f"\n===== CORPUS SIDECAR @ {time.ctime()} =====\n"); logf.flush()
-    proc = subprocess.Popen([sys.executable, str(HERE / "corpus_service.py")],
+    env["DATAROOM_DIR"] = str(dataroom_dir)
+    env["DATAROOM_PORT"] = str(port)
+    env["DATAROOM_CACHE_DIR"] = str(job_dir / ".dataroom_cache")
+    # /embed writes jsonl here; this is pi's cwd (parent of dataroom/), readable by the model.
+    env["WORK_DIR"] = str(dataroom_dir.parent)
+    logf = open(job_dir / "dataroom.log", "a")
+    logf.write(f"\n===== DATAROOM SIDECAR @ {time.ctime()} =====\n"); logf.flush()
+    proc = subprocess.Popen([sys.executable, str(HERE / "dataroom_service.py")],
                             env=env, stdout=logf, stderr=subprocess.STDOUT, start_new_session=True)
     logf.close()
     return proc
@@ -95,39 +95,39 @@ def wait_http(url: str, timeout: int = 600) -> bool:
     return False
 
 
-def _strip_single_wrapper(corpus_dir: Path):
+def _strip_single_wrapper(dataroom_dir: Path):
     """If everything sits under one top-level folder (the common zip wrapper, e.g. a GitHub
-    `repo-main/` or a hand-made `corpus/`), hoist its contents up one level so the corpus root
+    `repo-main/` or a hand-made `dataroom/`), hoist its contents up one level so the dataroom root
     is the real content, not a redundant nesting."""
-    entries = [p for p in corpus_dir.iterdir() if not p.name.startswith(".")]
+    entries = [p for p in dataroom_dir.iterdir() if not p.name.startswith(".")]
     if len(entries) == 1 and entries[0].is_dir():
         inner = entries[0]
         for item in list(inner.iterdir()):
-            shutil.move(str(item), str(corpus_dir / item.name))
+            shutil.move(str(item), str(dataroom_dir / item.name))
         inner.rmdir()
 
 
-def prepare_corpus(src: Path, corpus_dir: Path):
-    corpus_dir.mkdir(parents=True, exist_ok=True)
+def prepare_dataroom(src: Path, dataroom_dir: Path):
+    dataroom_dir.mkdir(parents=True, exist_ok=True)
     if src.is_dir():
         for item in src.iterdir():
-            dst = corpus_dir / item.name
+            dst = dataroom_dir / item.name
             if item.is_dir():
                 shutil.copytree(item, dst, dirs_exist_ok=True)
             else:
                 shutil.copy2(item, dst)
-        _strip_single_wrapper(corpus_dir)
+        _strip_single_wrapper(dataroom_dir)
         return
     if src.is_file() and zipfile.is_zipfile(src):
-        base = corpus_dir.resolve()
+        base = dataroom_dir.resolve()
         with zipfile.ZipFile(src) as z:
             for member in z.namelist():
-                tgt = (corpus_dir / member).resolve()
+                tgt = (dataroom_dir / member).resolve()
                 if str(tgt).startswith(str(base)):
-                    z.extract(member, corpus_dir)
-        _strip_single_wrapper(corpus_dir)
+                    z.extract(member, dataroom_dir)
+        _strip_single_wrapper(dataroom_dir)
         return
-    raise SystemExit(f"ERROR: corpus must be a .zip or a folder: {src}")
+    raise SystemExit(f"ERROR: dataroom must be a .zip or a folder: {src}")
 
 
 def session_file(agent_dir: Path) -> Path | None:
@@ -181,10 +181,10 @@ def answer_present(work_dir: Path) -> bool:
 # compaction summarizes/dilutes it on long runs. The system prompt is present on EVERY turn and
 # is never compacted, so the task framing stays stable for the whole budget. There is no skill.
 SYSTEM_TASK = (
-    "Answer the question below using the corpus/ folder in your working directory as your "
+    "Answer the question below using the dataroom/ folder in your working directory as your "
     "source. You have no network access. You can use all tools you have or build new tools or "
     "workflow using existing tools. When done, write your answer to ANSWER.md in the working "
-    "directory (not inside corpus/)."
+    "directory (not inside dataroom/)."
 )
 # The first user message is just the question (no skill expansion).
 TASK_COMMAND = "{query}"
@@ -195,19 +195,19 @@ KEEP_GOING = (
 )
 
 
-def drive(job_dir, work_dir, agent_dir, corpus_dir, args, budget):
+def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
     env = dict(os.environ)
     env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     env["PI_SKIP_VERSION_CHECK"] = "1"
     cmd = [os.environ.get("PI_BIN", "pi"), "--mode", "rpc",
            "--no-skills",
            "--append-system-prompt", SYSTEM_TASK,
-           "--extension", str(REPO / "pi" / "extensions" / "corpus-search.ts")]
+           "--extension", str(REPO / "pi" / "extensions" / "dataroom-search.ts")]
     log = open(job_dir / "pi.log", "a")
     log.write(f"\n\n===== RPC SESSION @ {time.ctime()} =====\n"); log.flush()
     log_path = job_dir / "pi.log"
 
-    # cwd = work_dir (sandbox: only corpus/ + ANSWER.md). Plumbing lives in the parent job_dir.
+    # cwd = work_dir (sandbox: only dataroom/ + ANSWER.md). Plumbing lives in the parent job_dir.
     proc = subprocess.Popen(cmd, cwd=str(work_dir), env=env,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
@@ -276,7 +276,7 @@ def drive(job_dir, work_dir, agent_dir, corpus_dir, args, budget):
             pass
 
     # Per-turn snapshots live in job_dir/snapshots (OUTSIDE work/, so pi's sandbox can't see
-    # them - this is meta/experiment data, not corpus). turns.jsonl gets one row EVERY turn;
+    # them - this is meta/experiment data, not dataroom). turns.jsonl gets one row EVERY turn;
     # an ANSWER-t{turn}.md file is written ONLY when ANSWER.md changed vs the previous snapshot
     # (dedup), so the snapshot set shows just the turns where the answer actually evolved.
     snap_dir = job_dir / "snapshots"
@@ -422,7 +422,7 @@ def write_run_meta(job_dir: Path, **fields):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--query", required=True)
-    ap.add_argument("--corpus", required=True)
+    ap.add_argument("--dataroom", required=True)
     ap.add_argument("--out", default="./out")
     ap.add_argument("--budget", type=int, default=int(os.environ.get("INPUT_TOKEN_BUDGET", "500000")))
     # Force-budget (default ON): budget is a FLOOR - keep nudging "Continue." until the input-token
@@ -442,33 +442,33 @@ def main():
 
     llama_url = os.environ.get("LLAMA_URL", "http://localhost:8080")
     job_dir = Path(args.out).resolve(); job_dir.mkdir(parents=True, exist_ok=True)
-    # work_dir is pi's cwd: a clean sandbox holding ONLY corpus/ and the model's ANSWER.md.
+    # work_dir is pi's cwd: a clean sandbox holding ONLY dataroom/ and the model's ANSWER.md.
     # All plumbing (input.zip, logs, meta, .pi-agent) stays in job_dir, the parent, which pi's
     # cwd cannot see - so the model can't ls/cat/unzip the raw input or read its own logs.
     work_dir = job_dir / "work"; work_dir.mkdir(parents=True, exist_ok=True)
-    corpus_dir = work_dir / "corpus"
+    dataroom_dir = work_dir / "dataroom"
     agent_dir = job_dir / ".pi-agent"
 
-    prepare_corpus(Path(args.corpus).resolve(), corpus_dir)
+    prepare_dataroom(Path(args.dataroom).resolve(), dataroom_dir)
     (job_dir / "query.txt").write_text(args.query)
 
     port = free_port()
-    os.environ["CORPUS_INDEX_URL"] = f"http://127.0.0.1:{port}"
+    os.environ["DATAROOM_INDEX_URL"] = f"http://127.0.0.1:{port}"
     write_pi_config(agent_dir, llama_url)
-    cs = boot_corpus(job_dir, corpus_dir, port)
-    if not wait_http(f"http://127.0.0.1:{port}/stats", int(os.environ.get("CORPUS_BOOT_TIMEOUT", "600"))):
-        print("ERROR: corpus sidecar did not come up", file=sys.stderr)
+    cs = boot_dataroom(job_dir, dataroom_dir, port)
+    if not wait_http(f"http://127.0.0.1:{port}/stats", int(os.environ.get("DATAROOM_BOOT_TIMEOUT", "600"))):
+        print("ERROR: dataroom sidecar did not come up", file=sys.stderr)
         try:
             os.killpg(os.getpgid(cs.pid), signal.SIGTERM)
         except Exception:
             cs.terminate()
-        write_run_meta(job_dir, stop_reason="error_corpus_boot", turns=0, done=False)
+        write_run_meta(job_dir, stop_reason="error_dataroom_boot", turns=0, done=False)
         sys.exit(3)
 
     start = time.time()
     turn, stop_reason, usage = 0, "error_pi_exited", {}
     try:
-        turn, stop_reason, usage = drive(job_dir, work_dir, agent_dir, corpus_dir, args, args.budget)
+        turn, stop_reason, usage = drive(job_dir, work_dir, agent_dir, dataroom_dir, args, args.budget)
     except KeyboardInterrupt:
         stop_reason = "interrupted"
     finally:

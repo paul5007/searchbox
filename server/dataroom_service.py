@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Corpus sidecar: local jina models over the UNZIPPED input corpus (read-only).
+"""Dataroom sidecar: local jina models over the UNZIPPED input dataroom (read-only).
 
 Two local Jina models, no network/web tools:
-  - jina-embeddings-v5-text-small  -> semantic search over the corpus  (/search)
+  - jina-embeddings-v5-text-small  -> semantic search over the dataroom  (/search)
   - jina-reranker-v3               -> cross-encoder reranking          (/rerank)
 
 NOTHING is indexed at boot. There is no precomputed index. The model decides, during the run,
 whether it wants embedding search at all - and if so, over what scope and with what chunking.
-/search embeds ON THE FLY: it reads the requested files (all corpus files, or only the `paths`
+/search embeds ON THE FLY: it reads the requested files (all dataroom files, or only the `paths`
 the model names), chunks them (default size, or a `chunk_size` the model picks), embeds, and
 returns the top matches. Within one run we memoize an embedded scope so a repeated identical
 search does not re-embed, but that index is built lazily on first use, never ahead of time.
@@ -45,16 +45,16 @@ EMBED_DEVICE = os.environ.get("EMBED_DEVICE", "cpu")
 if EMBED_DEVICE.startswith("cpu"):
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-CORPUS_DIR = os.path.abspath(os.environ.get("CORPUS_DIR", "corpus"))
+DATAROOM_DIR = os.path.abspath(os.environ.get("DATAROOM_DIR", "dataroom"))
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "jinaai/jina-embeddings-v5-text-small")
 RERANK_MODEL = os.environ.get("RERANK_MODEL", "jinaai/jina-reranker-v3")
 EMBED_TASK = os.environ.get("EMBED_TASK", "retrieval")
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1400"))
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "180"))
 
-# Where /embed writes its jsonl output. This is the model's sandbox cwd (parent of corpus/), so
+# Where /embed writes its jsonl output. This is the model's sandbox cwd (parent of dataroom/), so
 # the model can read the file back with a plain relative path (cat / python). Falls back to CWD.
-WORK_DIR = os.environ.get("WORK_DIR") or os.path.dirname(CORPUS_DIR) or os.getcwd()
+WORK_DIR = os.environ.get("WORK_DIR") or os.path.dirname(DATAROOM_DIR) or os.getcwd()
 
 
 def _api_post(path: str, payload: dict) -> dict:
@@ -68,7 +68,7 @@ def _api_post(path: str, payload: dict) -> dict:
         return json.load(r)
 
 # Text-like files we will index. Binary/asset files are skipped (the agent can still `read`
-# or `bash` them directly). Extendable via CORPUS_GLOBS (comma-separated globs).
+# or `bash` them directly). Extendable via DATAROOM_GLOBS (comma-separated globs).
 DEFAULT_GLOBS = (
     "**/*.md", "**/*.txt", "**/*.rst", "**/*.py", "**/*.js", "**/*.ts", "**/*.tsx",
     "**/*.json", "**/*.jsonl", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.csv",
@@ -76,7 +76,7 @@ DEFAULT_GLOBS = (
     "**/*.cpp", "**/*.cc", "**/*.go", "**/*.rs", "**/*.java", "**/*.sql", "**/*.sh",
     "**/*.ipynb", "**/*.log", "**/*.cfg", "**/*.ini", "**/*.env",
 )
-_globs_env = os.environ.get("CORPUS_GLOBS", "").strip()
+_globs_env = os.environ.get("DATAROOM_GLOBS", "").strip()
 INDEX_GLOBS = tuple(g.strip() for g in _globs_env.split(",") if g.strip()) or DEFAULT_GLOBS
 MAX_FILE_BYTES = int(os.environ.get("MAX_FILE_BYTES", str(4 * 1024 * 1024)))  # skip huge blobs
 
@@ -103,7 +103,7 @@ def embed_model():
                     dev = "cpu"
             except Exception:
                 dev = "cpu"
-        print(f"[corpus] loading embed model {EMBED_MODEL} on {dev}", flush=True)
+        print(f"[dataroom] loading embed model {EMBED_MODEL} on {dev}", flush=True)
         _embed_model = SentenceTransformer(EMBED_MODEL, device=dev, trust_remote_code=True)
     return _embed_model
 
@@ -112,7 +112,7 @@ def rerank_model():
     global _rerank_model
     if _rerank_model is None:
         from transformers import AutoModel
-        print(f"[corpus] loading rerank model {RERANK_MODEL}", flush=True)
+        print(f"[dataroom] loading rerank model {RERANK_MODEL}", flush=True)
         m = AutoModel.from_pretrained(RERANK_MODEL, dtype="auto", trust_remote_code=True)
         m.eval()
         if EMBED_DEVICE.startswith("cuda"):
@@ -168,7 +168,7 @@ def _encode(texts, role: str) -> np.ndarray:
     return np.asarray(m.encode(texts, normalize_embeddings=True), dtype=np.float32)
 
 
-# --- corpus indexing ---------------------------------------------------------
+# --- dataroom indexing ---------------------------------------------------------
 def chunk(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list:
     text = text.strip()
     if len(text) <= size:
@@ -180,11 +180,11 @@ def chunk(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> li
     return out
 
 
-def _corpus_files() -> list:
+def _dataroom_files() -> list:
     found = []
     seen = set()
     for g in INDEX_GLOBS:
-        for ap in glob.glob(os.path.join(CORPUS_DIR, g), recursive=True):
+        for ap in glob.glob(os.path.join(DATAROOM_DIR, g), recursive=True):
             if not os.path.isfile(ap) or ap in seen:
                 continue
             try:
@@ -198,23 +198,23 @@ def _corpus_files() -> list:
 
 
 def _resolve_paths(paths) -> list:
-    """Map caller-supplied paths to absolute corpus files, guarding against escape.
-    If no paths given, use every text-like corpus file.
+    """Map caller-supplied paths to absolute dataroom files, guarding against escape.
+    If no paths given, use every text-like dataroom file.
 
     Robust to how the model actually calls it (verified against real traces):
       - ABSOLUTE paths: the model echoes the absolute paths it saw in tool results
-        (e.g. /.../work/corpus/foo.md). os.path.join would discard CORPUS_DIR for an
-        absolute arg, so we strip a leading CORPUS_DIR / "corpus/" prefix and treat the
-        remainder as corpus-relative.
-      - DIRECTORIES (incl. the corpus root itself, e.g. paths=["."] or the abs corpus dir):
+        (e.g. /.../work/dataroom/foo.md). os.path.join would discard DATAROOM_DIR for an
+        absolute arg, so we strip a leading DATAROOM_DIR / "dataroom/" prefix and treat the
+        remainder as dataroom-relative.
+      - DIRECTORIES (incl. the dataroom root itself, e.g. paths=["."] or the abs dataroom dir):
         expand to every text-like file under that directory, instead of returning nothing.
       - Anything that still resolves to a single file is kept as-is.
     Any path that matches nothing is skipped; if NOTHING matches, fall back to the whole
-    corpus so a clumsy `paths` arg degrades to a full search rather than empty results."""
+    dataroom so a clumsy `paths` arg degrades to a full search rather than empty results."""
     if not paths:
-        return _corpus_files()
-    base = os.path.realpath(CORPUS_DIR)
-    allowed = set(_corpus_files())  # the canonical text-like file set (abspath, glob-based)
+        return _dataroom_files()
+    base = os.path.realpath(DATAROOM_DIR)
+    allowed = set(_dataroom_files())  # the canonical text-like file set (abspath, glob-based)
     allowed_real = {os.path.realpath(f): f for f in allowed}  # realpath -> canonical form
     out = []
 
@@ -226,13 +226,13 @@ def _resolve_paths(paths) -> list:
         p = str(p).strip()
         if not p:
             continue
-        # Normalize an absolute path that points inside (or at) the corpus to corpus-relative.
+        # Normalize an absolute path that points inside (or at) the dataroom to dataroom-relative.
         if os.path.isabs(p):
             rp = os.path.realpath(p)
             if rp == base or rp.startswith(base + os.sep):
                 p = os.path.relpath(rp, base)
             # else: leave as-is; the guard below rejects escapes.
-        ap = os.path.realpath(os.path.join(CORPUS_DIR, p))
+        ap = os.path.realpath(os.path.join(DATAROOM_DIR, p))
         if not (ap == base or ap.startswith(base + os.sep)):
             continue  # escape attempt
         if os.path.isfile(ap):
@@ -241,14 +241,14 @@ def _resolve_paths(paths) -> list:
             if canon:
                 _add(canon)
         elif os.path.isdir(ap):
-            # Expand to every indexable file under this directory (or the whole corpus if it
-            # IS the corpus root). Match via realpath to survive abspath/symlink differences.
+            # Expand to every indexable file under this directory (or the whole dataroom if it
+            # IS the dataroom root). Match via realpath to survive abspath/symlink differences.
             for fr, canon in allowed_real.items():
                 if ap == base or fr == ap or fr.startswith(ap + os.sep):
                     _add(canon)
-    # Clumsy/unmatched paths degrade to a full-corpus search instead of empty results.
+    # Clumsy/unmatched paths degrade to a full-dataroom search instead of empty results.
     if not out:
-        return _corpus_files()
+        return _dataroom_files()
     return out
 
 
@@ -260,7 +260,7 @@ def _build_scope(files: list, size: int, overlap: int):
             raw = open(ap, errors="ignore").read()
         except Exception:
             continue
-        rel = os.path.relpath(ap, CORPUS_DIR)
+        rel = os.path.relpath(ap, DATAROOM_DIR)
         for ci, c in enumerate(chunk(raw, size, overlap)):
             texts.append(c)
             meta.append({"path": rel, "chunk": ci, "text": c})
@@ -274,7 +274,7 @@ async def search(req: Request):
     """On-the-fly semantic search. Embeds the requested scope at call time (no boot index).
 
     body: {query, k=8, paths?[], chunk_size?, chunk_overlap?}
-      - paths omitted  -> search the whole corpus (model chose to search everything)
+      - paths omitted  -> search the whole dataroom (model chose to search everything)
       - paths given    -> only those files (model scoped it down to a part)
       - chunk_size/overlap -> model controls granularity (defaults otherwise)
     """
@@ -291,13 +291,13 @@ async def search(req: Request):
 
     # Memoize this exact scope for the run so repeated identical searches don't re-embed.
     # Built lazily here on first use - never at boot.
-    key = (tuple(sorted(os.path.relpath(f, CORPUS_DIR) for f in files)), size, overlap)
+    key = (tuple(sorted(os.path.relpath(f, DATAROOM_DIR) for f in files)), size, overlap)
     cached = _scope_cache.get(key)
     if cached is None:
         t0 = time.time()
         embs, meta = _build_scope(files, size, overlap)
         _scope_cache[key] = cached = {"embs": embs, "meta": meta}
-        print(f"[corpus] on-the-fly embed: {len(files)} files -> {len(meta)} chunks "
+        print(f"[dataroom] on-the-fly embed: {len(files)} files -> {len(meta)} chunks "
               f"(size={size}, overlap={overlap}) in {time.time()-t0:.1f}s", flush=True)
     embs, meta = cached["embs"], cached["meta"]
     if embs is None or embs.shape[0] == 0:
@@ -392,16 +392,16 @@ async def rerank(req: Request):
 
 @app.post("/stats")
 async def stats(_: Request):
-    """List the corpus files. Does NOT embed anything - there is no boot index."""
-    files = sorted(os.path.relpath(f, CORPUS_DIR) for f in _corpus_files())
+    """List the dataroom files. Does NOT embed anything - there is no boot index."""
+    files = sorted(os.path.relpath(f, DATAROOM_DIR) for f in _dataroom_files())
     return {"files": files, "file_count": len(files),
             "embedded_scopes": len(_scope_cache),
             "embed_backend": EMBED_BACKEND, "rerank_backend": RERANK_BACKEND,
             "embed_model": API_EMBED_MODEL if EMBED_BACKEND == "api" else EMBED_MODEL,
             "rerank_model": API_RERANK_MODEL if RERANK_BACKEND == "api" else RERANK_MODEL,
-            "corpus_dir": CORPUS_DIR}
+            "dataroom_dir": DATAROOM_DIR}
 
 
 if __name__ == "__main__":
     # No index is built at boot. Models load lazily on first /search or /rerank.
-    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("CORPUS_PORT", "8078")))
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("DATAROOM_PORT", "8078")))

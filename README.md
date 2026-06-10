@@ -1,7 +1,7 @@
 # Searchbox
 
 Give it a **prompt**, a **`.zip`** (or folder), and an **input-token budget**. A self-hosted
-model in a minimal [Pi](https://pi.dev) harness explores the corpus with local retrieval
+model in a minimal [Pi](https://pi.dev) harness explores the dataroom with local retrieval
 (jina-embeddings-v5-text-small + jina-reranker-v3, no web) until it has spent the budget, then
 writes `ANSWER.md`.
 
@@ -14,12 +14,12 @@ nothing the model sees prescribes method, format, or tool choice.
 
 `server/run_searchbox.py` drives a `pi --mode rpc` session:
 
-1. The corpus is unzipped to `corpus/` (read-only; a single wrapper dir is stripped). The
-   sidecar (`server/corpus_service.py`) indexes **nothing** at boot - it exposes only atomic
+1. The dataroom is unzipped to `dataroom/` (read-only; a single wrapper dir is stripped). The
+   sidecar (`server/dataroom_service.py`) indexes **nothing** at boot - it exposes only atomic
    model primitives (`sentence_embed`, `passage_rerank`), so the model decides if/when/how to
    embed, store, and search.
 2. The task framing is appended to Pi's **system prompt** (`--append-system-prompt`): answer
-   from `corpus/`, no network, use any tools or build your own workflow, write `ANSWER.md` when
+   from `dataroom/`, no network, use any tools or build your own workflow, write `ANSWER.md` when
    done. The question itself is sent once as the first user message. There is no skill - the
    system prompt is present on every turn and is never compacted, so the task stays stable for
    the whole budget (a skill body, by contrast, is injected once and gets diluted by
@@ -36,24 +36,24 @@ Every piece of model-facing text, and nothing else:
 
 | What | Where |
 | --- | --- |
-| System prompt | Pi's default coding-assistant prompt + our appended task ([`SYSTEM_TASK`](server/run_searchbox.py)): answer from `corpus/`, no network, use any tools or build your own workflow, write `ANSWER.md`. Present every turn, never compacted. |
+| System prompt | Pi's default coding-assistant prompt + our appended task ([`SYSTEM_TASK`](server/run_searchbox.py)): answer from `dataroom/`, no network, use any tools or build your own workflow, write `ANSWER.md`. Present every turn, never compacted. |
 | Task delivery | [`TASK_COMMAND`](server/run_searchbox.py) — the bare question, sent once as the first user message. No skill. |
 | Keep-going nudge | [`KEEP_GOING`](server/run_searchbox.py) — `Continue. (input tokens used: x/y)` |
 | Final-answer nudge | [run_searchbox.py](server/run_searchbox.py) — `Write your answer to ANSWER.md now.` (only if budget spent but no `ANSWER.md`) |
-| `sentence_embed` | [corpus-search.ts](pi/extensions/corpus-search.ts) — embed text(s) with jina-embeddings-v5-text-small; APPENDS vectors to a jsonl in the work dir and returns only {path,count,dim}; the model reads the file back and does its own similarity/search |
-| `passage_rerank` | [corpus-search.ts](pi/extensions/corpus-search.ts) — score caller-supplied passages by relevance (jina-reranker-v3) |
+| `sentence_embed` | [dataroom-search.ts](pi/extensions/dataroom-search.ts) — embed text(s) with jina-embeddings-v5-text-small; APPENDS vectors to a jsonl in the work dir and returns only {path,count,dim}; the model reads the file back and does its own similarity/search |
+| `passage_rerank` | [dataroom-search.ts](pi/extensions/dataroom-search.ts) — score caller-supplied passages by relevance (jina-reranker-v3) |
 
 Built-in Pi tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) keep Pi's stock
-descriptions. Unzip is in the orchestrator: the sidecar must embed the corpus before Pi starts,
-and every ablation run must begin from an identical corpus.
+descriptions. Unzip is in the orchestrator: the sidecar must embed the dataroom before Pi starts,
+and every ablation run must begin from an identical dataroom.
 
 ## Components
 
 ```
-server/corpus_service.py   FastAPI sidecar: /embed, /rerank, /search, /stats
+server/dataroom_service.py   FastAPI sidecar: /embed, /rerank, /search, /stats
 server/run_searchbox.py    orchestrator: unzip -> drive Pi -> stop on budget (task in system prompt)
 server/app.py + web/       upload UI + live dashboard
-pi/extensions/corpus-search.ts   sentence_embed + passage_rerank (default); semantic_search (opt-in)
+pi/extensions/dataroom-search.ts   sentence_embed + passage_rerank (default); semantic_search (opt-in)
 scripts/run.sh             one-shot CLI run
 scripts/ablate.py          ablation sweep
 ```
@@ -66,7 +66,7 @@ uv venv --python 3.11 .venv
 uv pip install --python .venv/bin/python torch -r server/requirements.txt huggingface-hub
 npm install -g @earendil-works/pi-coding-agent@0.78.0
 
-bash scripts/run.sh "Where is auth handled?" ./corpus.zip 300000 ./out
+bash scripts/run.sh "Where is auth handled?" ./dataroom.zip 300000 ./out
 cat ./out/ANSWER.md
 ```
 
@@ -84,7 +84,7 @@ Everything is an env knob — no code edits:
 | `INPUT_TOKEN_BUDGET` | the budget |
 
 ```bash
-python -m scripts.ablate --query "..." --corpus ./corpus.zip --budget 300000 \
+python -m scripts.ablate --query "..." --dataroom ./dataroom.zip --budget 300000 \
   --matrix config/ablations.example.json --out ./runs/exp1
 cat ./runs/exp1/results.jsonl    # one row per config
 ```

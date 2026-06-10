@@ -86,9 +86,9 @@ def session_usage(job_dir: Path) -> dict:
 
 
 # Job-internal plumbing the file tree should not surface (logs, configs, the raw upload,
-# the pi agent + embedding cache dirs). Everything else (corpus/, ANSWER.md, NOTES.md, any
+# the pi agent + embedding cache dirs). Everything else (dataroom/, ANSWER.md, NOTES.md, any
 # scratch the agent writes) shows up in the tree.
-_HIDE = {".pi-agent", ".corpus_cache", "input.zip", "pi.log", "corpus.log",
+_HIDE = {".pi-agent", ".dataroom_cache", "input.zip", "pi.log", "dataroom.log",
          "orchestrator.log", "meta.json", "run_meta.json", "query.txt", "control", "answer.zip"}
 
 
@@ -268,10 +268,10 @@ def parse_pi_log(log_path: Path) -> dict:
 
 
 def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
-    # work/ is pi's sandbox cwd: corpus/ + the model's outputs (ANSWER.md, scratch). Plumbing
+    # work/ is pi's sandbox cwd: dataroom/ + the model's outputs (ANSWER.md, scratch). Plumbing
     # lives in job_dir and is intentionally not shown. Walk work/ for the tree the user sees.
     work = job_dir / "work"
-    corpus = work / "corpus"
+    dataroom = work / "dataroom"
     tree, size = _walk_tree(work)
     tree["name"] = "output"
     log = parse_pi_log(job_dir / "pi.log")
@@ -308,8 +308,8 @@ def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
         "context_window": ctx_window,
         "context_tokens": usage.get("context_tokens", 0),
         "context_percent": round(min(100, 100 * usage.get("context_tokens", 0) / ctx_window), 1) if ctx_window else 0,
-        "corpus": {"tree": tree, "size_bytes": size,
-                   "file_count": sum(1 for p in corpus.rglob("*") if p.is_file()) if corpus.exists() else 0},
+        "dataroom": {"tree": tree, "size_bytes": size,
+                   "file_count": sum(1 for p in dataroom.rglob("*") if p.is_file()) if dataroom.exists() else 0},
         "answer_md": answer,
         "timing": read_timing(job_dir),
         "tps": llama_tps() if live else {},

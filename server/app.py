@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Searchbox API + UI.
 
-POST /jobs        (multipart: prompt, budget, corpus=<zipfile>)  -> {job_id}
+POST /jobs        (multipart: prompt, budget, dataroom=<zipfile>)  -> {job_id}
 GET  /jobs                         -> list
 GET  /jobs/{id}                    -> status
 GET  /jobs/{id}/stats              -> live metrics (drives the dashboard)
 GET  /jobs/{id}/answer             -> ANSWER.md (text)
-GET  /jobs/{id}/file?path=...      -> a corpus/output file
+GET  /jobs/{id}/file?path=...      -> a dataroom/output file
 GET  /jobs/{id}/dashboard          -> the dashboard HTML
 GET  /                             -> submit page
 GET  /health
@@ -57,7 +57,7 @@ def _run_one(job_id: str):
         _jobs[job_id]["started"] = time.time()
     _save_meta(job_id)
     cmd = [sys.executable, "-m", "server.run_searchbox",
-           "--query", meta["query"], "--corpus", str(job_dir / "input.zip"),
+           "--query", meta["query"], "--dataroom", str(job_dir / "input.zip"),
            "--out", str(job_dir), "--budget", str(meta["budget"])]
     # force_budget defaults ON; only add the off flag when explicitly disabled.
     if meta.get("force_budget") is False:
@@ -144,16 +144,16 @@ def health():
     return {"ok": True}
 
 
-# Default corpus used when the frontend submits no zip. It is treated exactly like an uploaded
+# Default dataroom used when the frontend submits no zip. It is treated exactly like an uploaded
 # zip (copied to input.zip, NOT pre-extracted) so the default path is end-to-end identical.
-DEFAULT_CORPUS = Path(os.environ.get(
-    "DEFAULT_CORPUS", str(HERE.parent / "data" / "default-corpus.zip")))
+DEFAULT_DATAROOM = Path(os.environ.get(
+    "DEFAULT_DATAROOM", str(HERE.parent / "data" / "default-dataroom.zip")))
 
 
 @app.post("/jobs")
 async def create(prompt: str = Form(...), budget: int = Form(...),
                  force_budget: bool = Form(True),
-                 corpus: UploadFile | None = File(None)):
+                 dataroom: UploadFile | None = File(None)):
     prompt = (prompt or "").strip()
     if len(prompt) < 5:
         raise HTTPException(400, "prompt too short")
@@ -162,19 +162,19 @@ async def create(prompt: str = Form(...), budget: int = Form(...),
     job_id = uuid.uuid4().hex[:12]
     job_dir = JOBS / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
-    if corpus is not None and corpus.filename:
-        data = await corpus.read()
-        corpus_name = corpus.filename
+    if dataroom is not None and dataroom.filename:
+        data = await dataroom.read()
+        dataroom_name = dataroom.filename
     else:
-        if not DEFAULT_CORPUS.exists():
-            raise HTTPException(400, "no corpus uploaded and no default corpus configured")
-        data = DEFAULT_CORPUS.read_bytes()
-        corpus_name = DEFAULT_CORPUS.name
+        if not DEFAULT_DATAROOM.exists():
+            raise HTTPException(400, "no dataroom uploaded and no default dataroom configured")
+        data = DEFAULT_DATAROOM.read_bytes()
+        dataroom_name = DEFAULT_DATAROOM.name
     (job_dir / "input.zip").write_bytes(data)
     with _cond:
         _jobs[job_id] = {"status": "queued", "query": prompt, "budget": budget,
                          "force_budget": bool(force_budget),
-                         "corpus_name": corpus_name, "corpus_bytes": len(data),
+                         "dataroom_name": dataroom_name, "dataroom_bytes": len(data),
                          "submitted": time.time()}
         _queue.append(job_id)
         _cond.notify_all()
@@ -336,7 +336,7 @@ _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 # Tree paths from /stats are relative to the job dir (root labeled 'output'), so resolve
 @app.get("/jobs/{job_id}/file")
 def get_file(job_id: str, path: str):
-    # Files are served from work/ only (corpus + model outputs). Plumbing lives in the parent
+    # Files are served from work/ only (dataroom + model outputs). Plumbing lives in the parent
     # job_dir, physically outside this base, so it cannot be fetched.
     base = (JOBS / job_id / "work").resolve()
     target = (base / path).resolve()

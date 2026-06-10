@@ -150,7 +150,7 @@
       <div class="sub"><span id="turns">0</span> turns · <span id="steps">0</span> steps</div>
     </div>
     <div class="cell">
-      <div class="k">Corpus</div>
+      <div class="k">Dataroom</div>
       <div class="big" id="cfiles">0</div>
       <div class="sub"><span id="csize">0 B</span> · files indexed</div>
     </div>
@@ -181,7 +181,7 @@
 
   <div class="panel split">
     <div class="treecol">
-      <div class="k">Corpus + output tree</div>
+      <div class="k">Dataroom + output tree</div>
       <pre class="tree" id="tree">—</pre>
     </div>
     <div class="prevcol">
@@ -200,9 +200,9 @@ let lastOk=0;
 function human(b){if(b<1024)return b+" B";const u=["KB","MB","GB"];let i=-1;do{b/=1024;i++}while(b>=1024&&i<2);return b.toFixed(b<10?1:0)+" "+u[i];}
 function dur(ms){ms=ms||0;const s=ms/1000;if(s<60)return s.toFixed(s<10?1:0)+"s";const m=Math.floor(s/60),r=Math.round(s%60);return m+"m"+(r?" "+r+"s":"");}
 function esc(s){return String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
-// Directories the user has collapsed (by tree path). corpus is collapsed by default so the
-// big corpus/ listing does not dominate the panel; click it to expand.
-const collapsed=new Set(["corpus"]);
+// Directories the user has collapsed (by tree path). dataroom is collapsed by default so the
+// big dataroom/ listing does not dominate the panel; click it to expand.
+const collapsed=new Set(["dataroom"]);
 function countFiles(node){if(!node)return 0;if(node.type==="file")return 1;return (node.children||[]).reduce((a,c)=>a+countFiles(c),0);}
 function renderTree(node,prefix="",isLast=true,root=true,path=""){
   let out="";
@@ -242,7 +242,7 @@ async function refreshPreview(){
 $("tree").addEventListener("click",e=>{
   const d=e.target.closest(".dir");
   if(d){const p=d.getAttribute("data-dir");if(collapsed.has(p))collapsed.delete(p);else collapsed.add(p);
-    if(lastTree!==null&&window.__lastCorpus){lastTree=renderTree(window.__lastCorpus);$("tree").innerHTML=lastTree;applySel();}return;}
+    if(lastTree!==null&&window.__lastDataroom){lastTree=renderTree(window.__lastDataroom);$("tree").innerHTML=lastTree;applySel();}return;}
   const f=e.target.closest(".f");if(f)loadPreview(f.getAttribute("data-path"));
 });
 
@@ -251,7 +251,7 @@ const STOP={
   first_turn_done:["done","DONE — first turn complete (force-budget off)"],
   ceiling_seconds:["stop","STOPPED — wall-clock ceiling"],
   ceiling_turns:["stop","STOPPED — turn ceiling"],
-  error_corpus_boot:["err","ERROR — corpus sidecar failed to start"],
+  error_dataroom_boot:["err","ERROR — dataroom sidecar failed to start"],
   cancelled:["stop","CANCELLED"],paused:["stop","PAUSED"],
 };
 function setStatus(s,done){
@@ -302,7 +302,7 @@ async function tick(){
     $("toolN").textContent=d.tool_calls||0;
     $("turns").textContent=d.turns||0;
     $("steps").textContent=d.steps||0;
-    const c=d.corpus||{};
+    const c=d.dataroom||{};
     $("cfiles").textContent=c.file_count||0;
     $("csize").textContent=human(c.size_bytes||0);
 
@@ -330,7 +330,7 @@ async function tick(){
     }).join(""):'<div class="empty">no calls yet</div>';
 
     // ANSWER.md auto-opens in the preview pane once present (it is also a tree node)
-    if(!selPath && d.corpus && treeHasFile(d.corpus.tree,"ANSWER.md"))loadPreview("ANSWER.md");
+    if(!selPath && d.dataroom && treeHasFile(d.dataroom.tree,"ANSWER.md"))loadPreview("ANSWER.md");
 
     // activity
     const rec=d.recent||[];let pt=null;
@@ -346,7 +346,7 @@ async function tick(){
     $("errs").innerHTML=errs.slice(-30).map(e=>`<li>${e.turn!=null?`[t${e.turn}] `:''}${esc(e.tool)} — ${esc(e.text)}</li>`).join("");
 
     // tree (store node so dir-collapse toggles can re-render without a poll)
-    window.__lastCorpus=c.tree||null;
+    window.__lastDataroom=c.tree||null;
     const th=c.tree?renderTree(c.tree):"—";
     if(th!==lastTree){lastTree=th;$("tree").innerHTML=th;applySel();}
     refreshPreview();

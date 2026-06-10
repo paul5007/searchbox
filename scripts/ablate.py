@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Ablation runner for searchbox.
 
-Runs the same (prompt, corpus, budget) through a matrix of configurations and collects the
+Runs the same (prompt, dataroom, budget) through a matrix of configurations and collects the
 result of each into one results.jsonl, so you can compare how the answer / token-spend /
 tool-usage change as you toggle tools or swap the base model.
 
 Each config is a dict of ENV OVERRIDES applied to a single `server.run_searchbox` invocation.
 The reserved ablation knobs (no code edits needed to vary any of these):
 
-  SEARCHBOX_TOOLS   which corpus tools are registered. "" = none, "sentence_embed",
+  SEARCHBOX_TOOLS   which dataroom tools are registered. "" = none, "sentence_embed",
                     "passage_rerank", or "sentence_embed,passage_rerank" (default = all).
   LLAMA_URL         OpenAI-compatible base-model server (swap the base LLM).
   MODEL_ID          agent-facing model id for that server.
@@ -20,7 +20,7 @@ The reserved ablation knobs (no code edits needed to vary any of these):
 Define the matrix in a JSON file (see config/ablations.example.json) or use the built-in
 default matrix (tool ablation). Example:
 
-  python -m scripts.ablate --query "..." --corpus path/to/corpus.zip \\
+  python -m scripts.ablate --query "..." --dataroom path/to/dataroom.zip \\
       --budget 300000 --matrix config/ablations.example.json --out runs/exp1
 
 Results: runs/exp1/<config_name>/ holds the full job (ANSWER.md, NOTES.md, pi.log, run_meta.json);
@@ -60,7 +60,7 @@ def run_one(cfg, args, exp_dir: Path) -> dict:
     # Per-config budget override allowed; else the sweep-wide budget.
     budget = str(cfg.get("budget", args.budget))
     cmd = [sys.executable, "-m", "server.run_searchbox",
-           "--query", args.query, "--corpus", str(Path(args.corpus).resolve()),
+           "--query", args.query, "--dataroom", str(Path(args.dataroom).resolve()),
            "--out", str(job_dir), "--budget", budget]
     if args.max_seconds:
         cmd += ["--max-seconds", str(args.max_seconds)]
@@ -114,7 +114,7 @@ def run_one(cfg, args, exp_dir: Path) -> dict:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--query", required=True)
-    ap.add_argument("--corpus", required=True)
+    ap.add_argument("--dataroom", required=True)
     ap.add_argument("--budget", type=int, default=int(os.environ.get("INPUT_TOKEN_BUDGET", "300000")))
     ap.add_argument("--matrix", help="JSON file with the ablation matrix; default = tool ablation")
     ap.add_argument("--out", default="./runs/ablation")

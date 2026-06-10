@@ -1,7 +1,7 @@
 #!/bin/bash
-# One-shot searchbox run: answer a prompt from a corpus zip/folder, spending a token budget.
+# One-shot searchbox run: answer a prompt from a dataroom zip/folder, spending a token budget.
 #
-#   bash scripts/run.sh "your question" path/to/corpus.zip 300000 ./out
+#   bash scripts/run.sh "your question" path/to/dataroom.zip 300000 ./out
 #
 # Requires: a running OpenAI-compatible model server at $LLAMA_URL (e.g. llama-server :8080),
 # the `pi` CLI on PATH, and the .venv set up (see README).
@@ -10,8 +10,8 @@ cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 set -a; [ -f .env ] && . ./.env; set +a
 
-QUERY="${1:?usage: run.sh <query> <corpus.zip|folder> [budget] [outdir]}"
-CORPUS="${2:?usage: run.sh <query> <corpus.zip|folder> [budget] [outdir]}"
+QUERY="${1:?usage: run.sh <query> <dataroom.zip|folder> [budget] [outdir]}"
+DATAROOM="${2:?usage: run.sh <query> <dataroom.zip|folder> [budget] [outdir]}"
 BUDGET="${3:-${INPUT_TOKEN_BUDGET:-500000}}"
 OUT="${4:-./out/$(date +%Y%m%d-%H%M%S)}"
 
@@ -24,8 +24,8 @@ export PI_SKIP_VERSION_CHECK=1
 export LLAMA_URL="${LLAMA_URL:-http://127.0.0.1:8080}"
 
 echo "query:  $QUERY"
-echo "corpus: $CORPUS"
+echo "dataroom: $DATAROOM"
 echo "budget: $BUDGET input tokens"
 echo "out:    $OUT"
 exec "$ROOT/.venv/bin/python" -m server.run_searchbox \
-  --query "$QUERY" --corpus "$CORPUS" --budget "$BUDGET" --out "$OUT"
+  --query "$QUERY" --dataroom "$DATAROOM" --budget "$BUDGET" --out "$OUT"
