@@ -373,9 +373,15 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
             if turn >= args.max_turns:
                 stop_reason = "ceiling_turns"; break
 
-            # Force-budget OFF: stop after the model's first turn ends, no nudging.
+            # Force-budget OFF: stop after the model's first turn ends - but only once ANSWER.md
+            # exists. If the model finished a turn without writing the answer, push the write
+            # prompt and let it run another turn; stop as soon as the answer is present.
             if not args.force_budget:
-                stop_reason = "first_turn_done"; break
+                if answer_present(work_dir):
+                    stop_reason = "first_turn_done"; break
+                send({"type": "prompt", "message":
+                      "Write your answer to ANSWER.md now."})
+                continue
 
             if spent >= budget:
                 if answer_present(work_dir):
