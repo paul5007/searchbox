@@ -299,14 +299,14 @@ async function tick(){
     $("llmT").textContent=dur(tm.llm_ms||0);$("llmP").textContent=wall?`(${Math.round(100*(tm.llm_ms||0)/wall)}%)`:"";
     $("toolT").textContent=dur(tm.tool_ms||0);$("toolP").textContent=wall?`(${Math.round(100*(tm.tool_ms||0)/wall)}%)`:"";
 
-    // tool distribution: bar = call count, suffix = count (+cumulative time). bash is expanded
-    // into the actual programs it ran (ls/grep/wc/...), shown as indented sub-rows.
+    // tool distribution: bar = call count, suffix = count (no time). bash is expanded into the
+    // actual programs it ran (ls/grep/wc/...). Indent is on the name only, so all bars align.
     const dist=d.tool_distribution||{};const ks=Object.keys(dist);const max=Math.max(1,...Object.values(dist));
-    const btm=tm.by_tool_ms||{};const bash=d.bash_distribution||{};
-    function distRow(name,n,timeMs,indent){const t=timeMs?` · ${dur(timeMs)}`:"";return `<div class="row"${indent?' style="padding-left:14px"':''}><span class="name">${esc(name)}</span><span class="track"><i style="width:${100*n/max}%"></i></span><span class="n">${n}${t}</span></div>`;}
+    const bash=d.bash_distribution||{};
+    function distRow(name,n,indent){const nm=(indent?'└ ':'')+name;return `<div class="row"><span class="name">${esc(nm)}</span><span class="track"><i style="width:${100*n/max}%"></i></span><span class="n">${n}</span></div>`;}
     $("dist").innerHTML=ks.length?ks.map(k=>{
-      let h=distRow(k,dist[k],btm[k],false);
-      if(k==="bash"){const bk=Object.keys(bash);h+=bk.map(p=>distRow(p,bash[p],0,true)).join("");}
+      let h=distRow(k,dist[k],false);
+      if(k==="bash"){h+=Object.keys(bash).map(p=>distRow(p,bash[p],true)).join("");}
       return h;
     }).join(""):'<div class="empty">no calls yet</div>';
 
