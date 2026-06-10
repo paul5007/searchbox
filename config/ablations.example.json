@@ -4,7 +4,7 @@
     {
       "name": "qwen36_full",
       "env": {
-        "SEARCHBOX_TOOLS": "corpus_search,corpus_rerank",
+        "SEARCHBOX_TOOLS": "semantic_search,passage_rerank",
         "LLAMA_URL": "http://127.0.0.1:8080",
         "MODEL_ID": "qwen3.6",
         "CONTEXT_WINDOW": "131072"
@@ -13,7 +13,7 @@
     {
       "name": "qwen36_search_only",
       "env": {
-        "SEARCHBOX_TOOLS": "corpus_search",
+        "SEARCHBOX_TOOLS": "semantic_search",
         "LLAMA_URL": "http://127.0.0.1:8080",
         "MODEL_ID": "qwen3.6"
       }
@@ -29,7 +29,7 @@
     {
       "name": "other_model_full",
       "env": {
-        "SEARCHBOX_TOOLS": "corpus_search,corpus_rerank",
+        "SEARCHBOX_TOOLS": "semantic_search,passage_rerank",
         "LLAMA_URL": "http://127.0.0.1:8081",
         "MODEL_ID": "other-model",
         "CONTEXT_WINDOW": "65536"
@@ -38,7 +38,7 @@
     {
       "name": "embedder_nano",
       "env": {
-        "SEARCHBOX_TOOLS": "corpus_search,corpus_rerank",
+        "SEARCHBOX_TOOLS": "semantic_search,passage_rerank",
         "EMBED_MODEL": "jinaai/jina-embeddings-v5-text-nano",
         "MODEL_ID": "qwen3.6"
       }
@@ -47,7 +47,7 @@
       "name": "small_budget",
       "budget": 100000,
       "env": {
-        "SEARCHBOX_TOOLS": "corpus_search,corpus_rerank",
+        "SEARCHBOX_TOOLS": "semantic_search,passage_rerank",
         "MODEL_ID": "qwen3.6"
       }
     }

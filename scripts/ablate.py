@@ -8,8 +8,8 @@ tool-usage change as you toggle tools or swap the base model.
 Each config is a dict of ENV OVERRIDES applied to a single `server.run_searchbox` invocation.
 The reserved ablation knobs (no code edits needed to vary any of these):
 
-  SEARCHBOX_TOOLS   which corpus tools are registered. "" = none, "corpus_search",
-                    "corpus_rerank", or "corpus_search,corpus_rerank" (default = all).
+  SEARCHBOX_TOOLS   which corpus tools are registered. "" = none, "semantic_search",
+                    "passage_rerank", or "semantic_search,passage_rerank" (default = all).
   LLAMA_URL         OpenAI-compatible base-model server (swap the base LLM).
   MODEL_ID          agent-facing model id for that server.
   CONTEXT_WINDOW    context window for the chosen model.
@@ -33,9 +33,9 @@ REPO = Path(__file__).resolve().parent.parent
 
 # Default matrix: the tool ablation. Each entry is {name, env:{...}}.
 DEFAULT_MATRIX = [
-    {"name": "full",          "env": {"SEARCHBOX_TOOLS": "corpus_search,corpus_rerank"}},
-    {"name": "search_only",   "env": {"SEARCHBOX_TOOLS": "corpus_search"}},
-    {"name": "rerank_only",   "env": {"SEARCHBOX_TOOLS": "corpus_rerank"}},
+    {"name": "full",          "env": {"SEARCHBOX_TOOLS": "semantic_search,passage_rerank"}},
+    {"name": "search_only",   "env": {"SEARCHBOX_TOOLS": "semantic_search"}},
+    {"name": "rerank_only",   "env": {"SEARCHBOX_TOOLS": "passage_rerank"}},
     {"name": "no_tools",      "env": {"SEARCHBOX_TOOLS": ""}},  # bash/read only
 ]
 

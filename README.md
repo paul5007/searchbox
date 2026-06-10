@@ -1,141 +1,103 @@
 # Searchbox
 
-Hand it a **prompt**, a **`.zip`** (or folder), and an **input-token budget**. A local model
-in a [Pi](https://pi.dev) harness loops search-rerank-read over the unzipped corpus until it
-has **spent the budget** exploring, then writes a fully-cited answer grounded only in that
-corpus. No web access.
+Give it a **prompt**, a **`.zip`** (or folder), and an **input-token budget**. A self-hosted
+model in a minimal [Pi](https://pi.dev) harness explores the corpus with local retrieval
+(jina-embeddings-v5-text-small + jina-reranker-v3, no web) until it has spent the budget, then
+writes `ANSWER.md`.
 
-It is the closed-corpus inversion of [dataroom](https://github.com/hanxiao/dataroom):
-
-| | dataroom | searchbox |
-| --- | --- | --- |
-| Input | a query | a query + a zip + a token budget |
-| Tools | open web (jina CLI search/read) | local only: corpus embeddings + reranker |
-| Models | self-hosted LLM | self-hosted LLM + jina-embeddings-v5-text-small + jina-reranker-v3 |
-| Stop rule | a comprehensiveness **floor** (budget is a ceiling) | spend the input-token **budget** (turns/seconds are ceilings) |
-| Output | a knowledge-base `.zip` | a cited `ANSWER.md` |
-
-## Why
-
-For a grounded answer over a fixed body of material (a codebase, a data room, a document
-dump), the bottleneck is not reasoning - it is reading enough of the corpus to answer
-honestly. Searchbox forces that: it must consume an input-token budget of real corpus context
-through tool calls before it is allowed to answer, and a premature answer is rejected with the
-budget remaining. The result is an answer whose every claim cites a file you handed it.
+The point is to watch what a model does under a maximally restrained harness: given embedding
+search and a reranker but no instructions on how to use them, does it reach for them, or fall
+back to grep? So nothing the model sees prescribes method, format, or tool choice.
 
 ## How it works
 
-A persistent `pi --mode rpc` session is driven by `server/run_searchbox.py`:
+`server/run_searchbox.py` drives a `pi --mode rpc` session:
 
-1. The corpus zip is unzipped to `corpus/` (read-only; a single wrapper dir is stripped) and a
-   sidecar (`server/corpus_service.py`) chunks + embeds it once with **jina-embeddings-v5-text-small**
-   (cached on disk by content hash, so ablation reruns reuse the index).
-2. The task is sent to Pi once. Pi runs its own loop (tools, its own compaction) untouched. The
-   only thing the harness adds over vanilla Pi: when Pi goes idle while the budget is unspent,
-   it sends a bare `Continue.` so the run keeps going until the budget is spent.
-3. The orchestrator measures **input tokens spent** from the append-only Pi session JSONL
-   (compaction-safe; see [token accounting](#token-accounting)) each cycle.
-4. When the input-token budget is spent and `ANSWER.md` exists, the run stops. `run_meta.json`
-   records the stop reason, full token breakdown, tool calls, timing, and config (for ablation).
+1. The corpus is unzipped to `corpus/` (read-only; a single wrapper dir is stripped) and a
+   sidecar (`server/corpus_service.py`) embeds it once with jina-embeddings-v5-text-small,
+   cached on disk by content hash.
+2. The task is sent once as `/skill:searchbox <question>`. Pi runs its own loop and its own
+   compaction, untouched. The only thing added over vanilla Pi: while the budget is unspent and
+   Pi goes idle, send a bare `Continue.`.
+3. Input tokens spent are read each cycle from the Pi session file (see
+   [Token accounting](#token-accounting)).
+4. When the budget is spent and `ANSWER.md` exists, the run stops. `run_meta.json` records the
+   stop reason, token breakdown, tool calls, timing, and config.
 
-## What the model sees (prompts, skill, tool descriptions)
+## What the model sees
 
-This harness is deliberately minimal and **non-directive** - the experiment observes the model's
-own behavior (does it reach for embedding search / rerank, or grep?), so nothing in the text the
-model sees hints at methodology, answer format, thinking style, or which tool to prefer. Every
-piece of model-facing text lives in exactly these places:
+Every piece of model-facing text, and nothing else:
 
-| What | Where | Notes |
-| --- | --- | --- |
-| **System prompt** | none of ours - Pi's **default** | We do not set `--system-prompt` / `--append-system-prompt`, and ship no `SYSTEM.md`. |
-| **Skill (the only task text)** | [`pi/skills/searchbox/SKILL.md`](pi/skills/searchbox/SKILL.md) | The whole task: answer from `corpus/`, no network, write `ANSWER.md`. No method/format/tool hints. |
-| **How the task is delivered** | [`server/run_searchbox.py` `TASK_COMMAND` (L183)](server/run_searchbox.py#L183) | We send `/skill:searchbox <question>`. Pi expands this to the **full SKILL.md body + the question** as one user message - this both guarantees the skill is actually loaded (otherwise Pi only puts the skill's name/description in context and the model may never `read` the body) and carries the question, so there is no separate task prompt. |
-| **Keep-going nudge** | [`server/run_searchbox.py` `KEEP_GOING` (L186-188)](server/run_searchbox.py#L186-L188) | Bare `Continue. (input tokens used: x/y)` while budget unspent. The only mechanism added over vanilla Pi. |
-| **Budget-spent / no-answer nudge** | [`server/run_searchbox.py`](server/run_searchbox.py) | If budget is spent but no `ANSWER.md`: `Write your answer to ANSWER.md now.` |
-| **`corpus_search` description** | [`pi/extensions/corpus-search.ts` (L54-56)](pi/extensions/corpus-search.ts#L54-L56) | Neutral: "embed `query` with v5-text-small, return top-k chunks by cosine". No usage guidance. |
-| **`corpus_rerank` description** | [`pi/extensions/corpus-search.ts` (L82-84)](pi/extensions/corpus-search.ts#L82-L84) | Neutral: "score `documents` for `query` with reranker-v3". A pure reranker - it does not fetch its own candidates. |
+| What | Where |
+| --- | --- |
+| System prompt | none of ours — Pi's default (no `--system-prompt`, no `SYSTEM.md`) |
+| Task | [`pi/skills/searchbox/SKILL.md`](pi/skills/searchbox/SKILL.md) — answer from `corpus/`, no network, write `ANSWER.md` |
+| Task delivery | [`TASK_COMMAND`](server/run_searchbox.py#L183) — `/skill:searchbox <q>`; Pi expands it to the full SKILL.md body + question, which guarantees the skill is loaded (otherwise only its name/description is in context) |
+| Keep-going nudge | [`KEEP_GOING`](server/run_searchbox.py#L186-L188) — `Continue. (input tokens used: x/y)` |
+| Final-answer nudge | [run_searchbox.py#L330](server/run_searchbox.py#L330) — `Write your answer to ANSWER.md now.` (only if budget spent but no `ANSWER.md`) |
+| `semantic_search` | [corpus-search.ts#L52-L54](pi/extensions/corpus-search.ts#L52-L54) — find passages by meaning; when you don't know exact wording |
+| `passage_rerank` | [corpus-search.ts#L78-L80](pi/extensions/corpus-search.ts#L78-L80) — re-order passages you supply by relevance |
 
-Built-in Pi tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) carry Pi's own stock
-descriptions, which we do not modify.
-
-On why decompression is **not** in the skill: the corpus must be unzipped and embedded by the
-sidecar *before* Pi starts, and every ablation run must start from a byte-identical corpus. So
-unzip stays in the orchestrator (pure plumbing, invisible to the model); putting it in the skill
-would add lazy-indexing machinery and let a weak model corrupt the run's starting point.
+Built-in Pi tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) keep Pi's stock
+descriptions. Unzip is in the orchestrator, not the skill: the sidecar must embed the corpus
+before Pi starts, and every ablation run must begin from an identical corpus.
 
 ## Components
 
 ```
-server/
-  corpus_service.py    # FastAPI sidecar: /search (v5-text-small), /rerank (reranker-v3), /stats
-  run_searchbox.py     # orchestrator: unzip -> boot sidecar -> drive Pi -> budget-gated stop
-pi/
-  extensions/corpus-search.ts   # Pi tools: corpus_search, corpus_rerank (gated by SEARCHBOX_TOOLS)
-  skills/searchbox/SKILL.md     # 2-sentence skill: task + source + where to write the answer
-scripts/
-  run.sh               # one-shot CLI run
-  ablate.py            # ablation sweep runner
-config/
-  ablations.example.json
+server/corpus_service.py   FastAPI sidecar: /search, /rerank, /stats
+server/run_searchbox.py    orchestrator: unzip -> embed -> drive Pi -> stop on budget
+server/app.py + web/       upload UI + live dashboard
+pi/extensions/corpus-search.ts   semantic_search + passage_rerank (gated by SEARCHBOX_TOOLS)
+pi/skills/searchbox/SKILL.md     the task
+scripts/run.sh             one-shot CLI run
+scripts/ablate.py          ablation sweep
 ```
 
 ## Get started
 
 ```bash
-cd searchbox
 cp .env.example .env          # point LLAMA_URL at your OpenAI-compatible model server
-
-# python env (corpus sidecar deps: jina v5-text-small + reranker-v3)
 uv venv --python 3.11 .venv
 uv pip install --python .venv/bin/python torch -r server/requirements.txt huggingface-hub
-
-# the Pi agent
 npm install -g @earendil-works/pi-coding-agent@0.78.0
 
-# a model server (any OpenAI-compatible /v1; e.g. llama-server on :8080)
-# then:
-bash scripts/run.sh "What does this codebase do and where is auth handled?" ./mycorpus.zip 300000 ./out
+bash scripts/run.sh "Where is auth handled?" ./corpus.zip 300000 ./out
 cat ./out/ANSWER.md
 ```
 
+Web UI: `python -m server.app` then open `http://localhost:8000`.
+
 ## Ablation
 
-Everything that matters for an ablation study is an **env knob** - no code edits:
+Everything is an env knob — no code edits:
 
-| Knob | What it ablates |
+| Knob | Ablates |
 | --- | --- |
-| `SEARCHBOX_TOOLS` | which corpus tools the agent gets: `corpus_search,corpus_rerank` / `corpus_search` / `corpus_rerank` / `` (none; bash+read only) |
+| `SEARCHBOX_TOOLS` | tools the model gets: `semantic_search,passage_rerank` / `semantic_search` / `passage_rerank` / `` (none) |
 | `LLAMA_URL` + `MODEL_ID` + `CONTEXT_WINDOW` | the base LLM |
 | `EMBED_MODEL` / `RERANK_MODEL` | the retrieval models |
-| `INPUT_TOKEN_BUDGET` (or per-config `budget`) | the spend floor |
-
-Run a sweep:
+| `INPUT_TOKEN_BUDGET` | the budget |
 
 ```bash
-python -m scripts.ablate \
-  --query "your question" --corpus ./mycorpus.zip --budget 300000 \
+python -m scripts.ablate --query "..." --corpus ./corpus.zip --budget 300000 \
   --matrix config/ablations.example.json --out ./runs/exp1
-
-cat ./runs/exp1/results.jsonl    # one summary row per config (tokens spent, tool calls, answer size, stop reason)
+cat ./runs/exp1/results.jsonl    # one row per config
 ```
 
-The default matrix (omit `--matrix`) is the tool ablation: `full`, `search_only`,
-`rerank_only`, `no_tools`. Each config's full job (ANSWER.md, NOTES.md, pi.log, run_meta.json)
-lands in `runs/exp1/<config_name>/`.
+Default matrix (omit `--matrix`): `full`, `search_only`, `rerank_only`, `no_tools`.
 
 ## Token accounting
 
-The budget is measured against **`input`** (fresh prefill tokens the model actually processed);
-the UI also shows `output`, `cacheRead`, `cacheWrite`, and `total`. Switch the budgeted field
-with `BUDGET_METRIC`.
+The budget is measured against **`input`** (fresh prefill tokens the model processed); the UI
+also shows `output`, `cacheRead`, `cacheWrite`, `total`. Change the budgeted field with
+`BUDGET_METRIC`.
 
-Source of truth is the **append-only Pi session JSONL**, summed over assistant-message `usage`
-(same fields Pi uses). This is deliberate: Pi's `get_session_stats` sums only in-memory messages,
-which Pi's compaction prunes, so it *undercounts* a long run; the session file is append-only
-(compaction only appends a summary, never deletes the usage-bearing entries), so it is
-compaction-safe. See [`server/run_searchbox.py` `session_usage`](server/run_searchbox.py) and
-[`server/stats.py`](server/stats.py). Timing (wall / LLM / tool, per-tool) is stopwatched from
-Pi's event stream and tok/s from llama.cpp `/metrics` (Pi reports neither).
+Source of truth is the append-only Pi session file, summed over assistant-message `usage`. Pi's
+`get_session_stats` sums only in-memory messages, which compaction prunes, so it undercounts a
+long run; the session file is never rewritten, so it is compaction-safe. Timing (wall / LLM /
+tool) is stopwatched from Pi's event stream and tok/s comes from llama.cpp `/metrics` — Pi
+reports neither.
 
 ## License
 

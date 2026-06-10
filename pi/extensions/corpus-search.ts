@@ -1,17 +1,10 @@
 /**
- * corpus-search: local-only retrieval tools over the uploaded corpus, backed by
- * jina-embeddings-v5-text-small (semantic search) and jina-reranker-v3 (cross-encoder),
- * served by server/corpus_service.py. NO web access - this is the searchbox inversion of
- * dataroom's open-web jina CLI: the agent may only look inside the corpus it was given.
+ * Two local-only retrieval tools over the uploaded corpus, served by server/corpus_service.py:
+ *   semantic_search  -> jina-embeddings-v5-text-small
+ *   passage_rerank   -> jina-reranker-v3
  *
- * Tools (each gated by an env flag so the ablation harness can disable individual tools
- * WITHOUT touching this file - flip SEARCHBOX_TOOLS in the orchestrator):
- *   corpus_search { query, k }              -> top-k chunks by v5-text-small cosine
- *   corpus_rerank { query, k?, top_n }      -> reranker-v3 over search hits (or given docs)
- *
- * Env:
- *   CORPUS_INDEX_URL   default http://127.0.0.1:8078
- *   SEARCHBOX_TOOLS    comma list of enabled tool names (default: all). Ablation knob.
+ * Each tool is gated by SEARCHBOX_TOOLS so the ablation harness can disable it without editing
+ * this file. CORPUS_INDEX_URL defaults to http://127.0.0.1:8078.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -24,7 +17,13 @@ const ENABLED = (() => {
   if (!raw) return null; // null => allow all
   return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
 })();
-const enabled = (name: string) => ENABLED === null || ENABLED.has(name);
+// Backward-compatible aliases so older SEARCHBOX_TOOLS values keep working.
+const ALIAS: Record<string, string> = {
+  corpus_search: "semantic_search",
+  corpus_rerank: "passage_rerank",
+};
+const enabled = (name: string) =>
+  ENABLED === null || ENABLED.has(name) || [...ENABLED].some((n) => ALIAS[n] === name);
 
 async function call(op: string, body: Record<string, unknown>): Promise<string> {
   const res = await fetch(`${BASE}/${op}`, {
@@ -45,17 +44,16 @@ function err(text: string) {
 }
 
 export default function (pi: ExtensionAPI) {
-  if (enabled("corpus_search")) {
+  if (enabled("semantic_search")) {
     pi.registerTool({
-      name: "corpus_search",
-      label: "Corpus Search",
-      // Neutral: state what the model is and what the call returns. No guidance on when or
-      // how to use it (the experiment observes whether the model reaches for it on its own).
+      name: "semantic_search",
+      label: "Semantic Search",
       description:
-        "Embed `query` with jina-embeddings-v5-text-small and return the corpus text chunks " +
-        "with the highest cosine similarity. Returns {path, chunk, score, text} for the top k.",
+        "Find passages in the corpus by meaning, not keywords (embedding similarity). " +
+        "Use it to locate relevant text when you do not know the exact wording. " +
+        "Returns the top-k chunks as {path, chunk, score, text}.",
       parameters: Type.Object({
-        query: Type.String({ description: "Query text to embed." }),
+        query: Type.String({ description: "What you are looking for." }),
         k: Type.Optional(Type.Number({ description: "Number of chunks to return (default 8)." })),
       }),
       async execute(_id, params) {
@@ -72,19 +70,17 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
-  if (enabled("corpus_rerank")) {
+  if (enabled("passage_rerank")) {
     pi.registerTool({
-      name: "corpus_rerank",
-      label: "Corpus Rerank",
-      // Pure reranker: query + a list of documents -> relevance scores. It does NOT fetch its
-      // own candidates (no hidden embedding search) - the caller supplies the documents. Neutral
-      // description, basic model usage only.
+      name: "passage_rerank",
+      label: "Passage Rerank",
       description:
-        "Score each document in `documents` for relevance to `query` with jina-reranker-v3 " +
-        "(a cross-encoder), and return them sorted by relevance_score (highest first).",
+        "Re-order a set of passages by how well each answers a query (cross-encoder, more " +
+        "accurate than similarity). Use it to pick the best few from a larger candidate set. " +
+        "You supply the passages; returns them sorted by relevance_score.",
       parameters: Type.Object({
-        query: Type.String({ description: "Query text." }),
-        documents: Type.Array(Type.String(), { description: "Documents to score against the query." }),
+        query: Type.String({ description: "What the passages should be relevant to." }),
+        documents: Type.Array(Type.String(), { description: "Passages to score." }),
         top_n: Type.Optional(Type.Number({ description: "Return only the top N (default: all)." })),
       }),
       async execute(_id, params) {

@@ -142,9 +142,9 @@ def _iter_events(log_path: Path):
 def _summarize(tool: str, args) -> str:
     a = args if isinstance(args, dict) else {}
     try:
-        if tool == "corpus_search":
+        if tool == "semantic_search":
             return f"search {str(a.get('query',''))[:80]}".strip()
-        if tool == "corpus_rerank":
+        if tool == "passage_rerank":
             return f"rerank {str(a.get('query',''))[:80]}".strip()
         if tool == "bash":
             cmd = re.sub(r"\s+", " ", str(a.get("command") or a.get("cmd") or "")).strip()
