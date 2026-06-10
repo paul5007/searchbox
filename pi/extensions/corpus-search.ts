@@ -51,18 +51,26 @@ export default function (pi: ExtensionAPI) {
       description:
         "Find passages in the corpus by meaning, not keywords (embedding similarity). " +
         "Use it to locate relevant text when you do not know the exact wording. " +
-        "Returns the top-k chunks as {path, chunk, score, text}.",
+        "Embeds on the fly over the scope you choose: by default the whole corpus, or pass " +
+        "`paths` to search only specific files. Returns the top-k chunks as {path, chunk, score, text}.",
       parameters: Type.Object({
         query: Type.String({ description: "What you are looking for." }),
         k: Type.Optional(Type.Number({ description: "Number of chunks to return (default 8)." })),
+        paths: Type.Optional(Type.Array(Type.String(), {
+          description: "Restrict the search to these corpus files (relative paths). Omit to search all.",
+        })),
+        chunk_size: Type.Optional(Type.Number({ description: "Characters per chunk (default 1400)." })),
       }),
       async execute(_id, params) {
         const p: any = params;
         const query = String(p.query ?? "");
         if (!query) return err("query is required");
         const k = Number.isFinite(p.k) ? Number(p.k) : 8;
+        const body: Record<string, unknown> = { query, k };
+        if (Array.isArray(p.paths) && p.paths.length) body.paths = p.paths;
+        if (Number.isFinite(p.chunk_size)) body.chunk_size = Number(p.chunk_size);
         try {
-          return ok(await call("search", { query, k }));
+          return ok(await call("search", body));
         } catch (e: any) {
           return err(String(e?.message || e));
         }

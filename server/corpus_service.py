@@ -5,20 +5,20 @@ Two local Jina models, no network/web tools:
   - jina-embeddings-v5-text-small  -> semantic search over the corpus  (/search)
   - jina-reranker-v3               -> cross-encoder reranking          (/rerank)
 
-This is the searchbox analogue of dataroom's index sidecar, but inverted: dataroom
-indexed the OUTPUT it was building; searchbox indexes the fixed INPUT corpus the user
-handed it, and never writes to it. The corpus is chunked + embedded once at boot and the
-embeddings are cached on disk keyed by a content hash, so repeated ablation runs over the
-same zip reuse the index instead of re-embedding.
+NOTHING is indexed at boot. There is no precomputed index. The model decides, during the run,
+whether it wants embedding search at all - and if so, over what scope and with what chunking.
+/search embeds ON THE FLY: it reads the requested files (all corpus files, or only the `paths`
+the model names), chunks them (default size, or a `chunk_size` the model picks), embeds, and
+returns the top matches. Within one run we memoize an embedded scope so a repeated identical
+search does not re-embed, but that index is built lazily on first use, never ahead of time.
 
 jina-embeddings-v5 retrieval is ASYMMETRIC: queries use the "query" prompt and passages
 the "document" prompt, so cosine scores are calibrated.
 
 Endpoints (POST JSON):
-  /search  {query, k=8}                              -> top-k corpus chunks w/ cosine score
-  /rerank  {query, documents?[], k?, top_n=8}        -> reranker-v3 ordering
-                                                         (documents given, OR pull k via search)
-  /stats   {}                                         -> {chunks, files, embed_model, rerank_model}
+  /search  {query, k=8, paths?[], chunk_size?, chunk_overlap?}  -> top-k chunks (on-the-fly embed)
+  /rerank  {query, documents[], top_n?}                          -> reranker-v3 ordering
+  /stats   {}                                                    -> {files, file_count, models}
 """
 import os, json, glob, hashlib, time
 import numpy as np
@@ -35,8 +35,6 @@ if EMBED_DEVICE.startswith("cpu"):
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
 CORPUS_DIR = os.path.abspath(os.environ.get("CORPUS_DIR", "corpus"))
-CACHE_DIR = os.path.abspath(os.environ.get("CORPUS_CACHE_DIR",
-                                           os.path.join(os.path.dirname(CORPUS_DIR), ".corpus_cache")))
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "jinaai/jina-embeddings-v5-text-small")
 RERANK_MODEL = os.environ.get("RERANK_MODEL", "jinaai/jina-reranker-v3")
 EMBED_TASK = os.environ.get("EMBED_TASK", "retrieval")
@@ -60,8 +58,10 @@ app = FastAPI()
 
 _embed_model = None
 _rerank_model = None
-_embs = None          # (N, D) float32, L2-normalized
-_meta = []            # [{path, chunk, text}]
+# Lazy per-scope index cache: key (paths tuple, chunk_size, overlap) -> {embs, meta}. Built only
+# when /search is first called for that scope; nothing exists until the model asks. Cleared via
+# nothing - it just lives for the process. No boot index, no on-disk precompute.
+_scope_cache: dict = {}
 
 
 # --- models ------------------------------------------------------------------
@@ -151,35 +151,22 @@ def _corpus_files() -> list:
     return sorted(found)
 
 
-def _corpus_hash(files: list) -> str:
-    h = hashlib.sha1()
-    h.update(f"{EMBED_MODEL}|{CHUNK_SIZE}|{CHUNK_OVERLAP}".encode())
-    for ap in files:
-        try:
-            st = os.stat(ap)
-            h.update(os.path.relpath(ap, CORPUS_DIR).encode())
-            h.update(str(st.st_size).encode())
-            h.update(str(int(st.st_mtime)).encode())
-        except OSError:
-            continue
-    return h.hexdigest()[:16]
+def _resolve_paths(paths) -> list:
+    """Map caller-supplied relative paths to absolute corpus files, guarding against escape.
+    If no paths given, use every text-like corpus file."""
+    if not paths:
+        return _corpus_files()
+    base = os.path.realpath(CORPUS_DIR)
+    out = []
+    for p in paths:
+        ap = os.path.realpath(os.path.join(CORPUS_DIR, p))
+        if ap.startswith(base) and os.path.isfile(ap) and ap not in out:
+            out.append(ap)
+    return out
 
 
-def build_index():
-    """Chunk + embed the whole corpus once. Cached on disk by corpus content hash."""
-    global _embs, _meta
-    files = _corpus_files()
-    key = _corpus_hash(files)
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    npz = os.path.join(CACHE_DIR, f"{key}.npz")
-    jsonl = os.path.join(CACHE_DIR, f"{key}.jsonl")
-    if os.path.exists(npz) and os.path.exists(jsonl):
-        _embs = np.load(npz)["embs"]
-        _meta = [json.loads(l) for l in open(jsonl) if l.strip()]
-        print(f"[corpus] loaded cached index {key}: {len(_meta)} chunks", flush=True)
-        return
-
-    t0 = time.time()
+def _build_scope(files: list, size: int, overlap: int):
+    """Read+chunk+embed the given files NOW. Returns (embs (N,D) normalized, meta list)."""
     texts, meta = [], []
     for ap in files:
         try:
@@ -187,40 +174,58 @@ def build_index():
         except Exception:
             continue
         rel = os.path.relpath(ap, CORPUS_DIR)
-        for ci, c in enumerate(chunk(raw)):
+        for ci, c in enumerate(chunk(raw, size, overlap)):
             texts.append(c)
             meta.append({"path": rel, "chunk": ci, "text": c})
-    if texts:
-        embs = _encode(texts, role="passage")
-    else:
-        embs = np.zeros((0, 0), dtype=np.float32)
-    _embs, _meta = embs, meta
-    np.savez_compressed(npz, embs=embs)
-    with open(jsonl, "w") as f:
-        for m in meta:
-            f.write(json.dumps(m, ensure_ascii=False) + "\n")
-    print(f"[corpus] indexed {len(files)} files -> {len(meta)} chunks in "
-          f"{time.time()-t0:.1f}s (cache {key})", flush=True)
+    embs = _encode(texts, role="passage") if texts else np.zeros((0, 0), dtype=np.float32)
+    return embs, meta
 
 
 # --- endpoints ---------------------------------------------------------------
 @app.post("/search")
 async def search(req: Request):
+    """On-the-fly semantic search. Embeds the requested scope at call time (no boot index).
+
+    body: {query, k=8, paths?[], chunk_size?, chunk_overlap?}
+      - paths omitted  -> search the whole corpus (model chose to search everything)
+      - paths given    -> only those files (model scoped it down to a part)
+      - chunk_size/overlap -> model controls granularity (defaults otherwise)
+    """
     body = await req.json()
     q = body.get("query", "")
+    if not q:
+        return {"results": [], "scope_chunks": 0}
     k = int(body.get("k", 8))
-    if _embs is None or _embs.shape[0] == 0 or not q:
-        return {"results": [], "count": 0}
+    size = int(body.get("chunk_size", CHUNK_SIZE))
+    overlap = int(body.get("chunk_overlap", CHUNK_OVERLAP))
+    files = _resolve_paths(body.get("paths"))
+    if not files:
+        return {"results": [], "scope_chunks": 0}
+
+    # Memoize this exact scope for the run so repeated identical searches don't re-embed.
+    # Built lazily here on first use - never at boot.
+    key = (tuple(sorted(os.path.relpath(f, CORPUS_DIR) for f in files)), size, overlap)
+    cached = _scope_cache.get(key)
+    if cached is None:
+        t0 = time.time()
+        embs, meta = _build_scope(files, size, overlap)
+        _scope_cache[key] = cached = {"embs": embs, "meta": meta}
+        print(f"[corpus] on-the-fly embed: {len(files)} files -> {len(meta)} chunks "
+              f"(size={size}, overlap={overlap}) in {time.time()-t0:.1f}s", flush=True)
+    embs, meta = cached["embs"], cached["meta"]
+    if embs is None or embs.shape[0] == 0:
+        return {"results": [], "scope_chunks": 0}
+
     qe = _encode([q], role="query")[0]
-    sims = _embs @ qe
+    sims = embs @ qe
     order = np.argsort(-sims)[:k]
     results = [{
-        "path": _meta[i]["path"],
-        "chunk": int(_meta[i]["chunk"]),
+        "path": meta[i]["path"],
+        "chunk": int(meta[i]["chunk"]),
         "score": round(float(sims[i]), 4),
-        "text": _meta[i]["text"],
+        "text": meta[i]["text"],
     } for i in order]
-    return {"results": results, "count": int(_embs.shape[0])}
+    return {"results": results, "scope_chunks": int(embs.shape[0]), "scope_files": len(files)}
 
 
 @app.post("/rerank")
@@ -246,13 +251,14 @@ async def rerank(req: Request):
 
 @app.post("/stats")
 async def stats(_: Request):
-    files = sorted({m["path"] for m in _meta})
-    return {"chunks": int(_embs.shape[0]) if _embs is not None and _embs.size else 0,
-            "files": files, "file_count": len(files),
+    """List the corpus files. Does NOT embed anything - there is no boot index."""
+    files = sorted(os.path.relpath(f, CORPUS_DIR) for f in _corpus_files())
+    return {"files": files, "file_count": len(files),
+            "embedded_scopes": len(_scope_cache),
             "embed_model": EMBED_MODEL, "rerank_model": RERANK_MODEL,
             "corpus_dir": CORPUS_DIR}
 
 
 if __name__ == "__main__":
-    build_index()
+    # No index is built at boot. Models load lazily on first /search or /rerank.
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("CORPUS_PORT", "8078")))
