@@ -225,38 +225,22 @@ async def search(req: Request):
 
 @app.post("/rerank")
 async def rerank(req: Request):
-    """Cross-encoder rerank with jina-reranker-v3.
+    """Pure cross-encoder rerank with jina-reranker-v3: score caller-supplied documents.
 
-    Two modes:
-      - {query, documents:[...], top_n}  -> rerank the given strings
-      - {query, k, top_n}                -> pull k via embedding search, then rerank to top_n
+    Deliberately does NOT fetch its own candidates (no hidden embedding search). The tool stays
+    a single-model primitive (basic reranker usage) - the model itself decides what to feed it.
     """
     body = await req.json()
     q = body.get("query", "")
-    top_n = int(body.get("top_n", 8))
     docs = body.get("documents")
-    src_meta = None
-    if not docs:
-        k = int(body.get("k", 30))
-        if _embs is None or _embs.shape[0] == 0 or not q:
-            return {"results": []}
-        qe = _encode([q], role="query")[0]
-        sims = _embs @ qe
-        order = np.argsort(-sims)[:k]
-        docs = [_meta[i]["text"] for i in order]
-        src_meta = [{"path": _meta[i]["path"], "chunk": int(_meta[i]["chunk"])} for i in order]
-    if not docs or not q:
+    top_n = body.get("top_n")
+    if not q or not docs:
         return {"results": []}
     m = rerank_model()
-    ranked = m.rerank(q, list(docs), top_n=top_n)
-    out = []
-    for r in ranked:
-        idx = int(r.get("index", -1))
-        item = {"score": round(float(r.get("relevance_score", 0.0)), 4),
-                "text": r.get("document", ""), "index": idx}
-        if src_meta is not None and 0 <= idx < len(src_meta):
-            item.update(src_meta[idx])
-        out.append(item)
+    kwargs = {"top_n": int(top_n)} if top_n is not None else {}
+    ranked = m.rerank(q, list(docs), **kwargs)
+    out = [{"score": round(float(r.get("relevance_score", 0.0)), 4),
+            "text": r.get("document", ""), "index": int(r.get("index", -1))} for r in ranked]
     return {"results": out}
 
 

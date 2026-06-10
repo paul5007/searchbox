@@ -49,14 +49,14 @@ export default function (pi: ExtensionAPI) {
     pi.registerTool({
       name: "corpus_search",
       label: "Corpus Search",
+      // Neutral: state what the model is and what the call returns. No guidance on when or
+      // how to use it (the experiment observes whether the model reaches for it on its own).
       description:
-        "Semantic search over the UPLOADED corpus only (jina-embeddings-v5-text-small). " +
-        "No web access. Returns top-k chunks with their file path, chunk index, cosine " +
-        "score, and full chunk text. Use this to locate relevant passages before reading " +
-        "whole files. Call repeatedly with varied queries to widen coverage.",
+        "Embed `query` with jina-embeddings-v5-text-small and return the corpus text chunks " +
+        "with the highest cosine similarity. Returns {path, chunk, score, text} for the top k.",
       parameters: Type.Object({
-        query: Type.String({ description: "What to look for in the corpus." }),
-        k: Type.Optional(Type.Number({ description: "How many chunks to return (default 8)." })),
+        query: Type.String({ description: "Query text to embed." }),
+        k: Type.Optional(Type.Number({ description: "Number of chunks to return (default 8)." })),
       }),
       async execute(_id, params) {
         const p: any = params;
@@ -76,26 +76,23 @@ export default function (pi: ExtensionAPI) {
     pi.registerTool({
       name: "corpus_rerank",
       label: "Corpus Rerank",
+      // Pure reranker: query + a list of documents -> relevance scores. It does NOT fetch its
+      // own candidates (no hidden embedding search) - the caller supplies the documents. Neutral
+      // description, basic model usage only.
       description:
-        "Cross-encoder rerank (jina-reranker-v3) over the corpus. Pass just {query, k, top_n} " +
-        "to pull k candidates by embedding search and rerank them down to the top_n most " +
-        "relevant, OR pass {query, documents:[...], top_n} to rerank a specific candidate set. " +
-        "Higher precision than corpus_search for picking the single best passages.",
+        "Score each document in `documents` for relevance to `query` with jina-reranker-v3 " +
+        "(a cross-encoder), and return them sorted by relevance_score (highest first).",
       parameters: Type.Object({
-        query: Type.String({ description: "The relevance criterion / question." }),
-        k: Type.Optional(Type.Number({ description: "Candidates to pull via search before reranking (default 30)." })),
-        top_n: Type.Optional(Type.Number({ description: "How many to return after rerank (default 8)." })),
-        documents: Type.Optional(Type.Array(Type.String(), {
-          description: "Optional explicit candidate strings to rerank instead of searching.",
-        })),
+        query: Type.String({ description: "Query text." }),
+        documents: Type.Array(Type.String(), { description: "Documents to score against the query." }),
+        top_n: Type.Optional(Type.Number({ description: "Return only the top N (default: all)." })),
       }),
       async execute(_id, params) {
         const p: any = params;
         const query = String(p.query ?? "");
         if (!query) return err("query is required");
-        const body: Record<string, unknown> = { query };
-        if (Array.isArray(p.documents) && p.documents.length) body.documents = p.documents;
-        if (Number.isFinite(p.k)) body.k = Number(p.k);
+        if (!Array.isArray(p.documents) || !p.documents.length) return err("documents is required");
+        const body: Record<string, unknown> = { query, documents: p.documents };
         if (Number.isFinite(p.top_n)) body.top_n = Number(p.top_n);
         try {
           return ok(await call("rerank", body));

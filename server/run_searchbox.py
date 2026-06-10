@@ -174,15 +174,19 @@ def answer_present(job_dir: Path) -> bool:
     return a.exists() and a.stat().st_size > 200
 
 
-# The only two prompts. Task once, then a plain "keep going" while the budget is unspent.
+# The only two prompts. Deliberately minimal and non-directive: we state the task, the source,
+# and where the answer goes - nothing about HOW to do it, which tools to use, how to think, or
+# what the answer should look like. The whole point is to observe the model's own behavior under
+# a maximally restrained harness, so no methodology/format/tool hints leak in here.
 TASK_PROMPT = (
     "Question: {query}\n\n"
-    "Follow the `searchbox` skill. The corpus is at `{corpus}` (read-only). Answer ONLY from it. "
-    "Explore it thoroughly, then write a fully-cited ANSWER.md in your working directory."
+    "Your source is the `corpus/` folder at `{corpus}`. You have no network access. "
+    "Write your answer to ANSWER.md in your working directory."
 )
+# Sent only to keep the run going until the input-token budget is spent (the one mechanism we
+# add over vanilla pi). No guidance on method or content.
 KEEP_GOING = (
-    "Keep exploring the corpus more deeply (you have used {spent}/{budget} input tokens). Open "
-    "new angles and read more files, then update ANSWER.md."
+    "Continue. (input tokens used: {spent}/{budget})"
 )
 
 
@@ -325,7 +329,7 @@ def drive(job_dir, agent_dir, corpus_dir, args, budget):
                 if answer_present(job_dir):
                     stop_reason = "budget_spent"; break
                 send({"type": "prompt", "message":
-                      "You have spent the budget. Write the final fully-cited ANSWER.md now."})
+                      "Write your answer to ANSWER.md now."})
                 continue
 
             send({"type": "prompt", "message": KEEP_GOING.format(spent=spent, budget=budget)})
