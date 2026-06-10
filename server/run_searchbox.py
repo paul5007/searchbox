@@ -176,13 +176,18 @@ def answer_present(work_dir: Path) -> bool:
     return a.exists() and a.stat().st_size > 200
 
 
-# The task is delivered as `/skill:searchbox <question>`. Pi expands this to the FULL SKILL.md
-# body + the question as one user message (verified), which both (a) guarantees the skill is
-# actually loaded - pi otherwise only puts the skill's name/description in context and the model
-# may never `read` the body - and (b) carries the question. So there is no separate task prompt:
-# all task text lives in SKILL.md (single source of truth). Nothing here hints at method, tools,
-# thinking style, or answer format - the experiment observes the model's own behavior.
-TASK_COMMAND = "/skill:searchbox {query}"
+# The task instruction lives in the SYSTEM PROMPT (appended via --append-system-prompt), not in
+# a skill. Reason: a skill body is injected only once as an early user message, so pi's
+# compaction summarizes/dilutes it on long runs. The system prompt is present on EVERY turn and
+# is never compacted, so the task framing stays stable for the whole budget. There is no skill.
+SYSTEM_TASK = (
+    "Answer the question below using the corpus/ folder in your working directory as your "
+    "source. You have no network access. You can use all tools you have or build new tools or "
+    "workflow using existing tools. When done, write your answer to ANSWER.md in the working "
+    "directory (not inside corpus/)."
+)
+# The first user message is just the question (no skill expansion).
+TASK_COMMAND = "{query}"
 # Sent only to keep the run going until the input-token budget is spent (the one mechanism we
 # add over vanilla pi). No guidance on method or content.
 KEEP_GOING = (
@@ -195,7 +200,8 @@ def drive(job_dir, work_dir, agent_dir, corpus_dir, args, budget):
     env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     env["PI_SKIP_VERSION_CHECK"] = "1"
     cmd = [os.environ.get("PI_BIN", "pi"), "--mode", "rpc",
-           "--skill", str(REPO / "pi" / "skills" / "searchbox"),
+           "--no-skills",
+           "--append-system-prompt", SYSTEM_TASK,
            "--extension", str(REPO / "pi" / "extensions" / "corpus-search.ts")]
     log = open(job_dir / "pi.log", "a")
     log.write(f"\n\n===== RPC SESSION @ {time.ctime()} =====\n"); log.flush()

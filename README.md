@@ -18,9 +18,13 @@ nothing the model sees prescribes method, format, or tool choice.
    sidecar (`server/corpus_service.py`) indexes **nothing** at boot - it exposes only atomic
    model primitives (`sentence_embed`, `passage_rerank`), so the model decides if/when/how to
    embed, store, and search.
-2. The task is sent once as `/skill:searchbox <question>`. Pi runs its own loop and its own
-   compaction, untouched. The only thing added over vanilla Pi: while the budget is unspent and
-   Pi goes idle, send a bare `Continue.`.
+2. The task framing is appended to Pi's **system prompt** (`--append-system-prompt`): answer
+   from `corpus/`, no network, use any tools or build your own workflow, write `ANSWER.md` when
+   done. The question itself is sent once as the first user message. There is no skill - the
+   system prompt is present on every turn and is never compacted, so the task stays stable for
+   the whole budget (a skill body, by contrast, is injected once and gets diluted by
+   compaction). Pi runs its own loop and compaction, untouched; the only thing added over
+   vanilla Pi is: while the budget is unspent and Pi goes idle, send a bare `Continue.`.
 3. Input tokens spent are read each cycle from the Pi session file (see
    [Token accounting](#token-accounting)).
 4. When the budget is spent and `ANSWER.md` exists, the run stops. `run_meta.json` records the
@@ -32,26 +36,24 @@ Every piece of model-facing text, and nothing else:
 
 | What | Where |
 | --- | --- |
-| System prompt | none of ours — Pi's default (no `--system-prompt`, no `SYSTEM.md`) |
-| Task | [`pi/skills/searchbox/SKILL.md`](pi/skills/searchbox/SKILL.md) — answer from `corpus/`, no network, write `ANSWER.md` |
-| Task delivery | [`TASK_COMMAND`](server/run_searchbox.py#L183) — `/skill:searchbox <q>`; Pi expands it to the full SKILL.md body + question, which guarantees the skill is loaded (otherwise only its name/description is in context) |
-| Keep-going nudge | [`KEEP_GOING`](server/run_searchbox.py#L186-L188) — `Continue. (input tokens used: x/y)` |
-| Final-answer nudge | [run_searchbox.py#L330](server/run_searchbox.py#L330) — `Write your answer to ANSWER.md now.` (only if budget spent but no `ANSWER.md`) |
+| System prompt | Pi's default coding-assistant prompt + our appended task ([`SYSTEM_TASK`](server/run_searchbox.py)): answer from `corpus/`, no network, use any tools or build your own workflow, write `ANSWER.md`. Present every turn, never compacted. |
+| Task delivery | [`TASK_COMMAND`](server/run_searchbox.py) — the bare question, sent once as the first user message. No skill. |
+| Keep-going nudge | [`KEEP_GOING`](server/run_searchbox.py) — `Continue. (input tokens used: x/y)` |
+| Final-answer nudge | [run_searchbox.py](server/run_searchbox.py) — `Write your answer to ANSWER.md now.` (only if budget spent but no `ANSWER.md`) |
 | `sentence_embed` | [corpus-search.ts](pi/extensions/corpus-search.ts) — embed text(s) with jina-embeddings-v5-text-small; APPENDS vectors to a jsonl in the work dir and returns only {path,count,dim}; the model reads the file back and does its own similarity/search |
-| `passage_rerank` | [corpus-search.ts#L85-L87](pi/extensions/corpus-search.ts#L85-L87) — re-order passages you supply by relevance |
+| `passage_rerank` | [corpus-search.ts](pi/extensions/corpus-search.ts) — score caller-supplied passages by relevance (jina-reranker-v3) |
 
 Built-in Pi tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) keep Pi's stock
-descriptions. Unzip is in the orchestrator, not the skill: the sidecar must embed the corpus
-before Pi starts, and every ablation run must begin from an identical corpus.
+descriptions. Unzip is in the orchestrator: the sidecar must embed the corpus before Pi starts,
+and every ablation run must begin from an identical corpus.
 
 ## Components
 
 ```
-server/corpus_service.py   FastAPI sidecar: /search, /rerank, /stats
-server/run_searchbox.py    orchestrator: unzip -> embed -> drive Pi -> stop on budget
+server/corpus_service.py   FastAPI sidecar: /embed, /rerank, /search, /stats
+server/run_searchbox.py    orchestrator: unzip -> drive Pi -> stop on budget (task in system prompt)
 server/app.py + web/       upload UI + live dashboard
-pi/extensions/corpus-search.ts   sentence_embed + passage_rerank (gated by SEARCHBOX_TOOLS)
-pi/skills/searchbox/SKILL.md     the task
+pi/extensions/corpus-search.ts   sentence_embed + passage_rerank (default); semantic_search (opt-in)
 scripts/run.sh             one-shot CLI run
 scripts/ablate.py          ablation sweep
 ```
