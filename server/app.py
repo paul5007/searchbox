@@ -102,6 +102,37 @@ def _worker():
             _save_meta(job_id)
 
 
+def _reconcile_on_startup():
+    """A fresh app process owns no running jobs. Any job left marked running/queued/pausing by a
+    previous (killed) process is stale: if it finished it has run_meta (trust that), otherwise it
+    was interrupted. Prevents zombie 'running' rows after an app restart/crash."""
+    if not JOBS.exists():
+        return
+    for p in JOBS.iterdir():
+        if not p.is_dir():
+            continue
+        meta = _load_meta(p.name)
+        if meta.get("status") not in ("running", "queued", "pausing"):
+            continue
+        rm = p / "run_meta.json"
+        if rm.exists():
+            try:
+                m = json.loads(rm.read_text())
+                meta["status"] = "done" if m.get("done") else "stopped"
+                meta["stop_reason"] = m.get("stop_reason")
+            except Exception:
+                meta["status"] = "interrupted"
+        else:
+            meta["status"] = "interrupted"
+        meta["finished"] = meta.get("finished") or time.time()
+        _jobs[p.name] = meta
+        try:
+            (p / "meta.json").write_text(json.dumps(meta))
+        except Exception:
+            pass
+
+
+_reconcile_on_startup()
 threading.Thread(target=_worker, daemon=True).start()
 
 
