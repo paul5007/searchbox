@@ -169,8 +169,8 @@ def count_tool_calls(log_path: Path) -> int:
     return sum(1 for raw in open(log_path, "rb") if b'"type":"tool_execution_start"' in raw)
 
 
-def answer_present(job_dir: Path) -> bool:
-    a = job_dir / "ANSWER.md"
+def answer_present(work_dir: Path) -> bool:
+    a = work_dir / "ANSWER.md"
     return a.exists() and a.stat().st_size > 200
 
 
@@ -188,7 +188,7 @@ KEEP_GOING = (
 )
 
 
-def drive(job_dir, agent_dir, corpus_dir, args, budget):
+def drive(job_dir, work_dir, agent_dir, corpus_dir, args, budget):
     env = dict(os.environ)
     env["PI_CODING_AGENT_DIR"] = str(agent_dir)
     env["PI_SKIP_VERSION_CHECK"] = "1"
@@ -199,7 +199,8 @@ def drive(job_dir, agent_dir, corpus_dir, args, budget):
     log.write(f"\n\n===== RPC SESSION @ {time.ctime()} =====\n"); log.flush()
     log_path = job_dir / "pi.log"
 
-    proc = subprocess.Popen(cmd, cwd=str(job_dir), env=env,
+    # cwd = work_dir (sandbox: only corpus/ + ANSWER.md). Plumbing lives in the parent job_dir.
+    proc = subprocess.Popen(cmd, cwd=str(work_dir), env=env,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1, start_new_session=True)
     lock = threading.Lock()
@@ -316,7 +317,7 @@ def drive(job_dir, agent_dir, corpus_dir, args, budget):
             elapsed = time.time() - start
             print(f"[searchbox] cycle {turn} {BUDGET_METRIC}={spent}/{budget} "
                   f"({round(100*spent/budget,1) if budget else 0}%) "
-                  f"tools={count_tool_calls(log_path)} ans={answer_present(job_dir)}", flush=True)
+                  f"tools={count_tool_calls(log_path)} ans={answer_present(work_dir)}", flush=True)
 
             if elapsed > args.max_seconds:
                 stop_reason = "ceiling_seconds"; break
@@ -324,7 +325,7 @@ def drive(job_dir, agent_dir, corpus_dir, args, budget):
                 stop_reason = "ceiling_turns"; break
 
             if spent >= budget:
-                if answer_present(job_dir):
+                if answer_present(work_dir):
                     stop_reason = "budget_spent"; break
                 send({"type": "prompt", "message":
                       "Write your answer to ANSWER.md now."})
@@ -382,7 +383,11 @@ def main():
 
     llama_url = os.environ.get("LLAMA_URL", "http://localhost:8080")
     job_dir = Path(args.out).resolve(); job_dir.mkdir(parents=True, exist_ok=True)
-    corpus_dir = job_dir / "corpus"
+    # work_dir is pi's cwd: a clean sandbox holding ONLY corpus/ and the model's ANSWER.md.
+    # All plumbing (input.zip, logs, meta, .pi-agent) stays in job_dir, the parent, which pi's
+    # cwd cannot see - so the model can't ls/cat/unzip the raw input or read its own logs.
+    work_dir = job_dir / "work"; work_dir.mkdir(parents=True, exist_ok=True)
+    corpus_dir = work_dir / "corpus"
     agent_dir = job_dir / ".pi-agent"
 
     prepare_corpus(Path(args.corpus).resolve(), corpus_dir)
@@ -404,7 +409,7 @@ def main():
     start = time.time()
     turn, stop_reason, usage = 0, "error_pi_exited", {}
     try:
-        turn, stop_reason, usage = drive(job_dir, agent_dir, corpus_dir, args, args.budget)
+        turn, stop_reason, usage = drive(job_dir, work_dir, agent_dir, corpus_dir, args, args.budget)
     except KeyboardInterrupt:
         stop_reason = "interrupted"
     finally:
@@ -418,11 +423,11 @@ def main():
             cs.terminate()
 
     spent = usage.get(BUDGET_METRIC, 0)
-    done = stop_reason == "budget_spent" and answer_present(job_dir)
+    done = stop_reason == "budget_spent" and answer_present(work_dir)
     write_run_meta(job_dir, stop_reason=stop_reason, turns=turn, done=done,
                    budget=args.budget, budget_metric=BUDGET_METRIC,
                    input_tokens_spent=spent, budget_pct=round(100*spent/args.budget, 1) if args.budget else None,
-                   tokens=usage, answer_present=answer_present(job_dir),
+                   tokens=usage, answer_present=answer_present(work_dir),
                    tool_calls=count_tool_calls(job_dir / "pi.log"),
                    elapsed_seconds=round(time.time() - start, 1),
                    tools_enabled=os.environ.get("SEARCHBOX_TOOLS", "all"),
@@ -430,7 +435,7 @@ def main():
     print(f"[searchbox] done (stop_reason={stop_reason}, {BUDGET_METRIC}={spent}/{args.budget})")
     print(json.dumps({"out": str(job_dir), "turns": turn, "done": done,
                       "stop_reason": stop_reason, "tokens": usage, "budget": args.budget,
-                      "answer": str(job_dir / "ANSWER.md")}))
+                      "answer": str(work_dir / "ANSWER.md")}))
 
 
 if __name__ == "__main__":

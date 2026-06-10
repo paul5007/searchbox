@@ -255,11 +255,11 @@ def parse_pi_log(log_path: Path) -> dict:
 
 
 def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
-    corpus = job_dir / "corpus"
-    # Walk the whole job dir so the agent's outputs (ANSWER.md, NOTES.md, any scratch) appear
-    # in the tree next to corpus/, not just the read-only corpus. Internal plumbing is hidden
-    # by _walk_tree. Relabel the root to 'output' so it reads as the job's working dir.
-    tree, size = _walk_tree(job_dir)
+    # work/ is pi's sandbox cwd: corpus/ + the model's outputs (ANSWER.md, scratch). Plumbing
+    # lives in job_dir and is intentionally not shown. Walk work/ for the tree the user sees.
+    work = job_dir / "work"
+    corpus = work / "corpus"
+    tree, size = _walk_tree(work)
     tree["name"] = "output"
     log = parse_pi_log(job_dir / "pi.log")
     usage = session_usage(job_dir)
@@ -282,7 +282,7 @@ def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
     bdg = bdg or int(os.environ.get("INPUT_TOKEN_BUDGET", "500000"))
 
     answer = ""
-    ap = job_dir / "ANSWER.md"
+    ap = work / "ANSWER.md"
     if ap.exists():
         answer = ap.read_text(errors="ignore")[:200000]
 

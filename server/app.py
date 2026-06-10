@@ -248,7 +248,7 @@ def stats_ep(job_id: str):
 
 @app.get("/jobs/{job_id}/answer")
 def answer(job_id: str):
-    p = JOBS / job_id / "ANSWER.md"
+    p = JOBS / job_id / "work" / "ANSWER.md"
     if not p.exists():
         raise HTTPException(404, "no answer yet")
     return PlainTextResponse(p.read_text(errors="ignore"))
@@ -256,7 +256,7 @@ def answer(job_id: str):
 
 @app.get("/jobs/{job_id}/answer/download")
 def answer_download(job_id: str):
-    p = JOBS / job_id / "ANSWER.md"
+    p = JOBS / job_id / "work" / "ANSWER.md"
     if not p.exists():
         raise HTTPException(404, "no answer yet")
     return FileResponse(str(p), media_type="text/markdown", filename=f"ANSWER-{job_id}.md")
@@ -302,22 +302,16 @@ _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
 
 
 # Tree paths from /stats are relative to the job dir (root labeled 'output'), so resolve
-# there. Block the internal plumbing files from being fetched even by direct URL.
-_FILE_HIDE = {"input.zip", "pi.log", "corpus.log", "orchestrator.log", "meta.json",
-              "run_meta.json", "control", "query.txt"}
-
-
 @app.get("/jobs/{job_id}/file")
 def get_file(job_id: str, path: str):
-    base = (JOBS / job_id).resolve()
+    # Files are served from work/ only (corpus + model outputs). Plumbing lives in the parent
+    # job_dir, physically outside this base, so it cannot be fetched.
+    base = (JOBS / job_id / "work").resolve()
     target = (base / path).resolve()
     try:
-        rel = target.relative_to(base)
+        target.relative_to(base)
     except ValueError:
-        raise HTTPException(403, "outside job dir")
-    parts = rel.parts
-    if parts and (parts[0] in (".pi-agent", ".corpus_cache") or parts[-1] in _FILE_HIDE):
-        raise HTTPException(404, "not found")
+        raise HTTPException(403, "outside work dir")
     if not target.is_file():
         raise HTTPException(404, "not found")
     ext = target.suffix.lower()
