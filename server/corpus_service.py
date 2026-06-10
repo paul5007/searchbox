@@ -58,7 +58,8 @@ def _api_post(path: str, payload: dict) -> dict:
         f"{JINA_API_BASE}/{path}",
         data=json.dumps(payload).encode(),
         headers={"Authorization": f"Bearer {JINA_API_KEY}",
-                 "Content-Type": "application/json", "Accept": "application/json"})
+                 "Content-Type": "application/json", "Accept": "application/json",
+                 "User-Agent": "Mozilla/5.0"})  # CF blocks the default Python-urllib UA
     with urllib.request.urlopen(req, timeout=120) as r:
         return json.load(r)
 
