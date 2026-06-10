@@ -48,15 +48,20 @@ piece of model-facing text lives in exactly these places:
 | What | Where | Notes |
 | --- | --- | --- |
 | **System prompt** | none of ours - Pi's **default** | We do not set `--system-prompt` / `--append-system-prompt`, and ship no `SYSTEM.md`. |
-| **Skill** | [`pi/skills/searchbox/SKILL.md`](pi/skills/searchbox/SKILL.md) | 2 sentences: task + source is `corpus/` + where to write the answer. No method/format. |
-| **Task prompt** | [`server/run_searchbox.py` `TASK_PROMPT` (L181-185)](server/run_searchbox.py#L181-L185) | Sent once: the question, that the source is `corpus/`, no network, write `ANSWER.md`. |
-| **Keep-going nudge** | [`server/run_searchbox.py` `KEEP_GOING` (L187-189)](server/run_searchbox.py#L187-L189) | Bare `Continue. (input tokens used: x/y)` while budget unspent. The only mechanism added over vanilla Pi. |
-| **Budget-spent / no-answer nudge** | [`server/run_searchbox.py` (L331-332)](server/run_searchbox.py#L331-L332) | If budget is spent but no `ANSWER.md`: `Write your answer to ANSWER.md now.` |
+| **Skill (the only task text)** | [`pi/skills/searchbox/SKILL.md`](pi/skills/searchbox/SKILL.md) | The whole task: answer from `corpus/`, no network, write `ANSWER.md`. No method/format/tool hints. |
+| **How the task is delivered** | [`server/run_searchbox.py` `TASK_COMMAND` (L183)](server/run_searchbox.py#L183) | We send `/skill:searchbox <question>`. Pi expands this to the **full SKILL.md body + the question** as one user message - this both guarantees the skill is actually loaded (otherwise Pi only puts the skill's name/description in context and the model may never `read` the body) and carries the question, so there is no separate task prompt. |
+| **Keep-going nudge** | [`server/run_searchbox.py` `KEEP_GOING` (L186-188)](server/run_searchbox.py#L186-L188) | Bare `Continue. (input tokens used: x/y)` while budget unspent. The only mechanism added over vanilla Pi. |
+| **Budget-spent / no-answer nudge** | [`server/run_searchbox.py`](server/run_searchbox.py) | If budget is spent but no `ANSWER.md`: `Write your answer to ANSWER.md now.` |
 | **`corpus_search` description** | [`pi/extensions/corpus-search.ts` (L54-56)](pi/extensions/corpus-search.ts#L54-L56) | Neutral: "embed `query` with v5-text-small, return top-k chunks by cosine". No usage guidance. |
 | **`corpus_rerank` description** | [`pi/extensions/corpus-search.ts` (L82-84)](pi/extensions/corpus-search.ts#L82-L84) | Neutral: "score `documents` for `query` with reranker-v3". A pure reranker - it does not fetch its own candidates. |
 
 Built-in Pi tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) carry Pi's own stock
 descriptions, which we do not modify.
+
+On why decompression is **not** in the skill: the corpus must be unzipped and embedded by the
+sidecar *before* Pi starts, and every ablation run must start from a byte-identical corpus. So
+unzip stays in the orchestrator (pure plumbing, invisible to the model); putting it in the skill
+would add lazy-indexing machinery and let a weak model corrupt the run's starting point.
 
 ## Components
 

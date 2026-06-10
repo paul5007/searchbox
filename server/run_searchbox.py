@@ -174,15 +174,13 @@ def answer_present(job_dir: Path) -> bool:
     return a.exists() and a.stat().st_size > 200
 
 
-# The only two prompts. Deliberately minimal and non-directive: we state the task, the source,
-# and where the answer goes - nothing about HOW to do it, which tools to use, how to think, or
-# what the answer should look like. The whole point is to observe the model's own behavior under
-# a maximally restrained harness, so no methodology/format/tool hints leak in here.
-TASK_PROMPT = (
-    "Question: {query}\n\n"
-    "Your source is the `corpus/` folder at `{corpus}`. You have no network access. "
-    "Write your answer to ANSWER.md in your working directory."
-)
+# The task is delivered as `/skill:searchbox <question>`. Pi expands this to the FULL SKILL.md
+# body + the question as one user message (verified), which both (a) guarantees the skill is
+# actually loaded - pi otherwise only puts the skill's name/description in context and the model
+# may never `read` the body - and (b) carries the question. So there is no separate task prompt:
+# all task text lives in SKILL.md (single source of truth). Nothing here hints at method, tools,
+# thinking style, or answer format - the experiment observes the model's own behavior.
+TASK_COMMAND = "/skill:searchbox {query}"
 # Sent only to keep the run going until the input-token budget is spent (the one mechanism we
 # add over vanilla pi). No guidance on method or content.
 KEEP_GOING = (
@@ -279,7 +277,7 @@ def drive(job_dir, agent_dir, corpus_dir, args, budget):
         u = session_usage(sfile)
         return u.get(BUDGET_METRIC, 0), u
 
-    send({"type": "prompt", "message": TASK_PROMPT.format(query=args.query, corpus=str(corpus_dir))})
+    send({"type": "prompt", "message": TASK_COMMAND.format(query=args.query)})
 
     try:
         while True:
