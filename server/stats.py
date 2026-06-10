@@ -211,9 +211,18 @@ def parse_pi_log(log_path: Path) -> dict:
             turns += 1
         elif t == "turn_start":
             steps += 1
-        elif t == "compaction_start":
-            compactions += 1
-            recent.append({"turn": turns, "tool": "compaction", "text": f"context compacted (#{compactions})"})
+        elif t == "compaction_end":
+            # Count only SUCCESSFUL compactions. pi can fire compaction_start then fail in
+            # compaction_end (aborted, or errorMessage set, e.g. the known "reading 'signal'"
+            # auto-compaction bug); those produce no session entry and must not be counted.
+            failed = bool(ev.get("aborted")) or bool(ev.get("errorMessage"))
+            if not failed:
+                compactions += 1
+                recent.append({"turn": turns, "tool": "compaction",
+                               "text": f"context compacted (#{compactions})"})
+            else:
+                recent.append({"turn": turns, "tool": "compaction",
+                               "text": f"compaction failed: {str(ev.get('errorMessage') or 'aborted')[:80]}"})
         elif t == "tool_execution_start":
             name = ev.get("toolName") or "unknown"
             tool_counts[name] = tool_counts.get(name, 0) + 1
