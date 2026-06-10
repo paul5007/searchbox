@@ -198,6 +198,49 @@ def answer(job_id: str):
     return PlainTextResponse(p.read_text(errors="ignore"))
 
 
+@app.get("/jobs/{job_id}/answer/download")
+def answer_download(job_id: str):
+    p = JOBS / job_id / "ANSWER.md"
+    if not p.exists():
+        raise HTTPException(404, "no answer yet")
+    return FileResponse(str(p), media_type="text/markdown", filename=f"ANSWER-{job_id}.md")
+
+
+def _session_file(job_id: str) -> Path | None:
+    sd = JOBS / job_id / ".pi-agent" / "sessions"
+    if not sd.exists():
+        return None
+    files = sorted(sd.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[0] if files else None
+
+
+@app.get("/jobs/{job_id}/trace.jsonl")
+def trace_jsonl(job_id: str):
+    """The complete native Pi trace: the session JSONL (every message, tool call, and thinking
+    block). This is Pi's own append-only record - no custom serialization."""
+    sf = _session_file(job_id)
+    if not sf:
+        raise HTTPException(404, "no trace yet")
+    return FileResponse(str(sf), media_type="application/x-ndjson", filename=f"trace-{job_id}.jsonl")
+
+
+@app.get("/jobs/{job_id}/trace.html")
+def trace_html(job_id: str):
+    """Rendered trace incl. thinking, via Pi's NATIVE `pi --export` (no custom renderer)."""
+    sf = _session_file(job_id)
+    if not sf:
+        raise HTTPException(404, "no trace yet")
+    out = JOBS / job_id / "trace.html"
+    pi_bin = os.environ.get("PI_BIN", "pi")
+    env = dict(os.environ); env["PI_SKIP_VERSION_CHECK"] = "1"
+    try:
+        subprocess.run([pi_bin, "--export", str(sf), str(out)],
+                       env=env, capture_output=True, timeout=120, check=True)
+    except Exception as e:
+        raise HTTPException(500, f"pi --export failed: {e}")
+    return FileResponse(str(out), media_type="text/html", filename=f"trace-{job_id}.html")
+
+
 _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
         ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp"}
 
