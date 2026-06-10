@@ -276,12 +276,14 @@ def drive(job_dir, work_dir, agent_dir, corpus_dir, args, budget):
 
     def snapshot(turn_no: int, spent: int, usage: dict, elapsed: float):
         try:
+            # ALWAYS write one ANSWER-t{n}.md per turn, even if the model has not produced
+            # ANSWER.md yet (write empty). This makes the snapshot set a complete per-turn
+            # timeline so you can see exactly which turn the answer first appeared and how it
+            # evolved - no missing turns.
             ans = work_dir / "ANSWER.md"
-            ans_chars = 0
-            if ans.exists():
-                body = ans.read_text(errors="ignore")
-                ans_chars = len(body)
-                (snap_dir / f"ANSWER-t{turn_no}.md").write_text(body)
+            body = ans.read_text(errors="ignore") if ans.exists() else ""
+            ans_chars = len(body)
+            (snap_dir / f"ANSWER-t{turn_no}.md").write_text(body)
             row = {
                 "turn": turn_no,
                 "ts": round(time.time(), 3),
