@@ -194,16 +194,50 @@ def _corpus_files() -> list:
 
 
 def _resolve_paths(paths) -> list:
-    """Map caller-supplied relative paths to absolute corpus files, guarding against escape.
-    If no paths given, use every text-like corpus file."""
+    """Map caller-supplied paths to absolute corpus files, guarding against escape.
+    If no paths given, use every text-like corpus file.
+
+    Robust to how the model actually calls it (verified against real traces):
+      - ABSOLUTE paths: the model echoes the absolute paths it saw in tool results
+        (e.g. /.../work/corpus/foo.md). os.path.join would discard CORPUS_DIR for an
+        absolute arg, so we strip a leading CORPUS_DIR / "corpus/" prefix and treat the
+        remainder as corpus-relative.
+      - DIRECTORIES (incl. the corpus root itself, e.g. paths=["."] or the abs corpus dir):
+        expand to every text-like file under that directory, instead of returning nothing.
+      - Anything that still resolves to a single file is kept as-is.
+    Any path that matches nothing is skipped; if NOTHING matches, fall back to the whole
+    corpus so a clumsy `paths` arg degrades to a full search rather than empty results."""
     if not paths:
         return _corpus_files()
     base = os.path.realpath(CORPUS_DIR)
+    all_files = None  # lazy whole-corpus list for directory expansion
     out = []
     for p in paths:
+        p = str(p).strip()
+        if not p:
+            continue
+        # Normalize an absolute path that points inside (or at) the corpus to corpus-relative.
+        if os.path.isabs(p):
+            rp = os.path.realpath(p)
+            if rp == base or rp.startswith(base + os.sep):
+                p = os.path.relpath(rp, base)
+            # else: leave as-is; the realpath/startswith guard below will reject escapes.
         ap = os.path.realpath(os.path.join(CORPUS_DIR, p))
-        if ap.startswith(base) and os.path.isfile(ap) and ap not in out:
-            out.append(ap)
+        if not (ap == base or ap.startswith(base + os.sep)):
+            continue  # escape attempt
+        if os.path.isfile(ap):
+            if ap not in out:
+                out.append(ap)
+        elif os.path.isdir(ap):
+            if all_files is None:
+                all_files = _corpus_files()
+            prefix = ap + os.sep if ap != base else base + os.sep
+            for f in all_files:
+                if (ap == base or f.startswith(prefix)) and f not in out:
+                    out.append(f)
+    # Clumsy/unmatched paths degrade to a full-corpus search instead of empty results.
+    if not out:
+        return _corpus_files()
     return out
 
 
