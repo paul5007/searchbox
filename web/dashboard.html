@@ -176,11 +176,6 @@
     <ul class="feed" id="feed"><li class="empty">waiting for the agent…</li></ul>
   </div>
 
-  <div class="panel">
-    <div class="k">Tool calls <span id="callsN" class="sub" style="margin:0;text-transform:none;letter-spacing:0"></span></div>
-    <ul class="feed" id="calls" style="max-height:min(40vh,420px)"><li class="empty">none yet</li></ul>
-  </div>
-
   <div class="panel split">
     <div class="treecol">
       <div class="k">Corpus + output tree</div>
@@ -304,10 +299,16 @@ async function tick(){
     $("llmT").textContent=dur(tm.llm_ms||0);$("llmP").textContent=wall?`(${Math.round(100*(tm.llm_ms||0)/wall)}%)`:"";
     $("toolT").textContent=dur(tm.tool_ms||0);$("toolP").textContent=wall?`(${Math.round(100*(tm.tool_ms||0)/wall)}%)`:"";
 
-    // tool distribution: bar = call count, suffix = calls + cumulative time per tool
+    // tool distribution: bar = call count, suffix = count (+cumulative time). bash is expanded
+    // into the actual programs it ran (ls/grep/wc/...), shown as indented sub-rows.
     const dist=d.tool_distribution||{};const ks=Object.keys(dist);const max=Math.max(1,...Object.values(dist));
-    const btm=tm.by_tool_ms||{};
-    $("dist").innerHTML=ks.length?ks.map(k=>{const t=btm[k]?` · ${dur(btm[k])}`:"";return `<div class="row"><span class="name">${esc(k)}</span><span class="track"><i style="width:${100*dist[k]/max}%"></i></span><span class="n">${dist[k]}${t}</span></div>`;}).join(""):'<div class="empty">no calls yet</div>';
+    const btm=tm.by_tool_ms||{};const bash=d.bash_distribution||{};
+    function distRow(name,n,timeMs,indent){const t=timeMs?` · ${dur(timeMs)}`:"";return `<div class="row"${indent?' style="padding-left:14px"':''}><span class="name">${esc(name)}</span><span class="track"><i style="width:${100*n/max}%"></i></span><span class="n">${n}${t}</span></div>`;}
+    $("dist").innerHTML=ks.length?ks.map(k=>{
+      let h=distRow(k,dist[k],btm[k],false);
+      if(k==="bash"){const bk=Object.keys(bash);h+=bk.map(p=>distRow(p,bash[p],0,true)).join("");}
+      return h;
+    }).join(""):'<div class="empty">no calls yet</div>';
 
     // ANSWER.md auto-opens in the preview pane once present (it is also a tree node)
     if(!selPath && d.corpus && treeHasFile(d.corpus.tree,"ANSWER.md"))loadPreview("ANSWER.md");
@@ -318,18 +319,6 @@ async function tick(){
     const fe=$("feed");fe.scrollTop=fe.scrollHeight;
     if(rec.length){const e=rec[rec.length-1];$("nowline").innerHTML=`<span class="dot on${live?' blink':''}"></span><span class="t">t${e.turn||0}</span>`+esc(e.text);}
 
-    // tool calls (full per-call detail: bash command, search query+paths, file path)
-    const calls=d.calls||[];
-    $("callsN").textContent=calls.length?`(${d.tool_calls||calls.length} total)`:"";
-    function callText(c){
-      if(c.tool==='bash')return '$ '+(c.command||'');
-      if(c.tool==='semantic_search')return 'semantic_search «'+(c.query||'')+'»'+(c.paths?' in ['+c.paths.join(', ')+']':' (whole corpus)');
-      if(c.tool==='passage_rerank')return 'passage_rerank «'+(c.query||'')+'»';
-      if(c.path!=null)return c.tool+' '+c.path;
-      return c.tool;
-    }
-    $("calls").innerHTML=calls.length?calls.map(c=>{const t=callText(c);return `<li title="${esc(t)}"><span class="t">#${c.n}</span><span class="v">${esc(t)}</span></li>`;}).join(""):'<li class="empty">none yet</li>';
-    const ce=$("calls");ce.scrollTop=ce.scrollHeight;
 
     // errors
     const errs=d.errors||[];

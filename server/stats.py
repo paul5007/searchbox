@@ -156,10 +156,27 @@ def _summarize(tool: str, args) -> str:
     return tool
 
 
+def _bash_programs(cmd: str):
+    """Extract the program names actually invoked in a bash command (handles pipes, &&, ||, ;,
+    sub-shells, env-var prefixes) so the distribution shows what bash really ran."""
+    progs = []
+    for seg in re.split(r"\||&&|\|\||;|\$\(|`|\bthen\b|\bdo\b", cmd):
+        toks = seg.strip().split()
+        i = 0
+        while i < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[i]):
+            i += 1  # skip VAR=val prefixes
+        if i < len(toks):
+            p = toks[i].split("/")[-1]
+            if re.match(r"^[A-Za-z0-9._-]+$", p):
+                progs.append(p)
+    return progs or ["bash"]
+
+
 def parse_pi_log(log_path: Path) -> dict:
     tool_counts, tool_calls = {}, 0
+    bash_counts = {}
     turns = steps = compactions = 0
-    recent, errors, calls = [], [], []
+    recent, errors = [], []
     for ev in _iter_events(log_path):
         t = ev.get("type")
         if t == "_session_start":
@@ -177,17 +194,10 @@ def parse_pi_log(log_path: Path) -> dict:
             tool_calls += 1
             args = ev.get("args") or {}
             recent.append({"turn": turns, "tool": name, "text": _summarize(name, args)})
-            # full per-call log (every tool call, full args) for the calls panel
-            detail = {"n": tool_calls, "turn": turns, "tool": name}
             if name == "bash":
-                detail["command"] = re.sub(r"\s+", " ", str(args.get("command") or args.get("cmd") or "")).strip()
-            elif name in ("semantic_search", "passage_rerank"):
-                detail["query"] = str(args.get("query", ""))
-                if args.get("paths"):
-                    detail["paths"] = [os.path.basename(str(p)) for p in args["paths"]]
-            elif name in ("read", "write", "edit"):
-                detail["path"] = str(args.get("path") or args.get("file") or "")
-            calls.append(detail)
+                cmd = str(args.get("command") or args.get("cmd") or "")
+                for prog in _bash_programs(cmd):
+                    bash_counts[prog] = bash_counts.get(prog, 0) + 1
         elif t == "tool_execution_end":
             res = ev.get("result") or {}
             is_err = ev.get("isError") or (isinstance(res, dict) and res.get("isError"))
@@ -218,7 +228,7 @@ def parse_pi_log(log_path: Path) -> dict:
         "tool_distribution": dict(sorted(tool_counts.items(), key=lambda kv: -kv[1])),
         "turns": turns, "steps": steps, "compactions": compactions,
         "recent": recent, "errors": errors,
-        "calls": calls[-200:],
+        "bash_distribution": dict(sorted(bash_counts.items(), key=lambda kv: -kv[1])),
     }
 
 
