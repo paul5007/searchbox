@@ -210,8 +210,14 @@ def _resolve_paths(paths) -> list:
     if not paths:
         return _corpus_files()
     base = os.path.realpath(CORPUS_DIR)
-    all_files = None  # lazy whole-corpus list for directory expansion
+    allowed = set(_corpus_files())  # the canonical text-like file set (abspath, glob-based)
+    allowed_real = {os.path.realpath(f): f for f in allowed}  # realpath -> canonical form
     out = []
+
+    def _add(canonical):
+        if canonical not in out:
+            out.append(canonical)
+
     for p in paths:
         p = str(p).strip()
         if not p:
@@ -221,20 +227,21 @@ def _resolve_paths(paths) -> list:
             rp = os.path.realpath(p)
             if rp == base or rp.startswith(base + os.sep):
                 p = os.path.relpath(rp, base)
-            # else: leave as-is; the realpath/startswith guard below will reject escapes.
+            # else: leave as-is; the guard below rejects escapes.
         ap = os.path.realpath(os.path.join(CORPUS_DIR, p))
         if not (ap == base or ap.startswith(base + os.sep)):
             continue  # escape attempt
         if os.path.isfile(ap):
-            if ap not in out:
-                out.append(ap)
+            # Keep only files in the indexable set (canonical form), matched via realpath.
+            canon = allowed_real.get(ap)
+            if canon:
+                _add(canon)
         elif os.path.isdir(ap):
-            if all_files is None:
-                all_files = _corpus_files()
-            prefix = ap + os.sep if ap != base else base + os.sep
-            for f in all_files:
-                if (ap == base or f.startswith(prefix)) and f not in out:
-                    out.append(f)
+            # Expand to every indexable file under this directory (or the whole corpus if it
+            # IS the corpus root). Match via realpath to survive abspath/symlink differences.
+            for fr, canon in allowed_real.items():
+                if ap == base or fr == ap or fr.startswith(ap + os.sep):
+                    _add(canon)
     # Clumsy/unmatched paths degrade to a full-corpus search instead of empty results.
     if not out:
         return _corpus_files()
