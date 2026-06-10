@@ -4,7 +4,7 @@
 Token totals come from the append-only Pi session JSONL (compaction-safe; see run_searchbox.py),
 using the same fields Pi uses (input/output/cacheRead/cacheWrite). The BUDGET is `input`.
 """
-import json, os, re, urllib.request
+import json, os, re, shlex, urllib.request
 from pathlib import Path
 
 BUDGET_METRIC = os.environ.get("BUDGET_METRIC", "input")
@@ -156,19 +156,41 @@ def _summarize(tool: str, args) -> str:
     return tool
 
 
+# Shell operators after which a new command starts (so the next token is a program name).
+_CMD_SEP = {"|", "||", "&&", ";", "&", "(", "{", "|&"}
+# Keywords whose following token is also a command position.
+_CMD_KW = {"then", "do", "else", "elif", "!", "time", "xargs", "sudo", "nohup", "command", "exec", "env"}
+_PROG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._+-]*$")
+
+
 def _bash_programs(cmd: str):
-    """Extract the program names actually invoked in a bash command (handles pipes, &&, ||, ;,
-    sub-shells, env-var prefixes) so the distribution shows what bash really ran."""
-    progs = []
-    for seg in re.split(r"\||&&|\|\||;|\$\(|`|\bthen\b|\bdo\b", cmd):
-        toks = seg.strip().split()
-        i = 0
-        while i < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[i]):
-            i += 1  # skip VAR=val prefixes
-        if i < len(toks):
-            p = toks[i].split("/")[-1]
-            if re.match(r"^[A-Za-z0-9._-]+$", p):
-                progs.append(p)
+    """Names of programs actually invoked in a bash command.
+
+    Uses shlex so quoted text (e.g. grep -iE "v3|v4") is one token and never mistaken for a
+    command. A program name is only taken at a command position: the very start, or right after
+    a shell operator (| && || ; & ( {) or a command-introducing keyword. Redirections, flags,
+    quoted args, VAR= prefixes, and pipe-pattern fragments are skipped."""
+    try:
+        toks = shlex.split(cmd, posix=True)
+    except ValueError:
+        toks = cmd.split()
+    progs, expect = [], True  # expect a command name at the start
+    for tk in toks:
+        if tk in _CMD_SEP:
+            expect = True
+            continue
+        if tk in _CMD_KW:
+            expect = True  # the wrapper itself is plumbing; the real program is the next token
+            continue
+        if not expect:
+            continue
+        # at a command position now
+        if "=" in tk and _PROG_RE.match(tk.split("=", 1)[0]):
+            continue  # VAR=val prefix -> command is still the next token
+        expect = False
+        p = tk.split("/")[-1]
+        if _PROG_RE.match(p):
+            progs.append(p)
     return progs or ["bash"]
 
 
