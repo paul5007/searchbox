@@ -27,16 +27,36 @@ budget remaining. The result is an answer whose every claim cites a file you han
 
 A persistent `pi --mode rpc` session is driven by `server/run_searchbox.py`:
 
-1. The corpus zip is unzipped to `corpus/` (read-only) and a sidecar
-   (`server/corpus_service.py`) chunks + embeds it once with **jina-embeddings-v5-text-small**
+1. The corpus zip is unzipped to `corpus/` (read-only; a single wrapper dir is stripped) and a
+   sidecar (`server/corpus_service.py`) chunks + embeds it once with **jina-embeddings-v5-text-small**
    (cached on disk by content hash, so ablation reruns reuse the index).
-2. The agent loops: `corpus_search` (v5-text-small semantic search) -> `corpus_rerank`
-   (jina-reranker-v3 cross-encoder) -> `read`/`bash` the full files -> record cited findings.
-3. The orchestrator measures **input tokens spent** (llama.cpp `prompt_tokens_total`, with a
-   pi.log usage fallback) each cycle. It keeps nudging the agent to explore until `spent >=
-   budget`. A `DONE` written before the budget is spent is rejected.
-4. When the budget is spent and `ANSWER.md` exists, the run stops. `run_meta.json` records the
-   stop reason, tokens spent, tool calls, and config (for ablation).
+2. The task is sent to Pi once. Pi runs its own loop (tools, its own compaction) untouched. The
+   only thing the harness adds over vanilla Pi: when Pi goes idle while the budget is unspent,
+   it sends a bare `Continue.` so the run keeps going until the budget is spent.
+3. The orchestrator measures **input tokens spent** from the append-only Pi session JSONL
+   (compaction-safe; see [token accounting](#token-accounting)) each cycle.
+4. When the input-token budget is spent and `ANSWER.md` exists, the run stops. `run_meta.json`
+   records the stop reason, full token breakdown, tool calls, timing, and config (for ablation).
+
+## What the model sees (prompts, skill, tool descriptions)
+
+This harness is deliberately minimal and **non-directive** - the experiment observes the model's
+own behavior (does it reach for embedding search / rerank, or grep?), so nothing in the text the
+model sees hints at methodology, answer format, thinking style, or which tool to prefer. Every
+piece of model-facing text lives in exactly these places:
+
+| What | Where | Notes |
+| --- | --- | --- |
+| **System prompt** | none of ours - Pi's **default** | We do not set `--system-prompt` / `--append-system-prompt`, and ship no `SYSTEM.md`. |
+| **Skill** | [`pi/skills/searchbox/SKILL.md`](pi/skills/searchbox/SKILL.md) | 2 sentences: task + source is `corpus/` + where to write the answer. No method/format. |
+| **Task prompt** | [`server/run_searchbox.py` `TASK_PROMPT` (L181-185)](server/run_searchbox.py#L181-L185) | Sent once: the question, that the source is `corpus/`, no network, write `ANSWER.md`. |
+| **Keep-going nudge** | [`server/run_searchbox.py` `KEEP_GOING` (L187-189)](server/run_searchbox.py#L187-L189) | Bare `Continue. (input tokens used: x/y)` while budget unspent. The only mechanism added over vanilla Pi. |
+| **Budget-spent / no-answer nudge** | [`server/run_searchbox.py` (L331-332)](server/run_searchbox.py#L331-L332) | If budget is spent but no `ANSWER.md`: `Write your answer to ANSWER.md now.` |
+| **`corpus_search` description** | [`pi/extensions/corpus-search.ts` (L54-56)](pi/extensions/corpus-search.ts#L54-L56) | Neutral: "embed `query` with v5-text-small, return top-k chunks by cosine". No usage guidance. |
+| **`corpus_rerank` description** | [`pi/extensions/corpus-search.ts` (L82-84)](pi/extensions/corpus-search.ts#L82-L84) | Neutral: "score `documents` for `query` with reranker-v3". A pure reranker - it does not fetch its own candidates. |
+
+Built-in Pi tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) carry Pi's own stock
+descriptions, which we do not modify.
 
 ## Components
 
@@ -46,7 +66,7 @@ server/
   run_searchbox.py     # orchestrator: unzip -> boot sidecar -> drive Pi -> budget-gated stop
 pi/
   extensions/corpus-search.ts   # Pi tools: corpus_search, corpus_rerank (gated by SEARCHBOX_TOOLS)
-  skills/searchbox/SKILL.md     # the agent's one-page methodology (closed-corpus, budget-burning)
+  skills/searchbox/SKILL.md     # 2-sentence skill: task + source + where to write the answer
 scripts/
   run.sh               # one-shot CLI run
   ablate.py            # ablation sweep runner
@@ -97,6 +117,20 @@ cat ./runs/exp1/results.jsonl    # one summary row per config (tokens spent, too
 The default matrix (omit `--matrix`) is the tool ablation: `full`, `search_only`,
 `rerank_only`, `no_tools`. Each config's full job (ANSWER.md, NOTES.md, pi.log, run_meta.json)
 lands in `runs/exp1/<config_name>/`.
+
+## Token accounting
+
+The budget is measured against **`input`** (fresh prefill tokens the model actually processed);
+the UI also shows `output`, `cacheRead`, `cacheWrite`, and `total`. Switch the budgeted field
+with `BUDGET_METRIC`.
+
+Source of truth is the **append-only Pi session JSONL**, summed over assistant-message `usage`
+(same fields Pi uses). This is deliberate: Pi's `get_session_stats` sums only in-memory messages,
+which Pi's compaction prunes, so it *undercounts* a long run; the session file is append-only
+(compaction only appends a summary, never deletes the usage-bearing entries), so it is
+compaction-safe. See [`server/run_searchbox.py` `session_usage`](server/run_searchbox.py) and
+[`server/stats.py`](server/stats.py). Timing (wall / LLM / tool, per-tool) is stopwatched from
+Pi's event stream and tok/s from llama.cpp `/metrics` (Pi reports neither).
 
 ## License
 
