@@ -276,22 +276,25 @@ def drive(job_dir, work_dir, agent_dir, corpus_dir, args, budget):
             pass
 
     # Per-turn snapshots live in job_dir/snapshots (OUTSIDE work/, so pi's sandbox can't see
-    # them - this is meta/experiment data, not corpus). Each turn we record the current
-    # ANSWER.md as ANSWER-t{turn}.md and append one token/usage row to turns.jsonl.
+    # them - this is meta/experiment data, not corpus). turns.jsonl gets one row EVERY turn;
+    # an ANSWER-t{turn}.md file is written ONLY when ANSWER.md changed vs the previous snapshot
+    # (dedup), so the snapshot set shows just the turns where the answer actually evolved.
     snap_dir = job_dir / "snapshots"
     snap_dir.mkdir(parents=True, exist_ok=True)
     turns_jsonl = snap_dir / "turns.jsonl"
+    last_answer = {"body": None}  # body of the most recently SAVED ANSWER-t*.md
 
     def snapshot(turn_no: int, spent: int, usage: dict, elapsed: float):
         try:
-            # ALWAYS write one ANSWER-t{n}.md per turn, even if the model has not produced
-            # ANSWER.md yet (write empty). This makes the snapshot set a complete per-turn
-            # timeline so you can see exactly which turn the answer first appeared and how it
-            # evolved - no missing turns.
             ans = work_dir / "ANSWER.md"
             body = ans.read_text(errors="ignore") if ans.exists() else ""
             ans_chars = len(body)
-            (snap_dir / f"ANSWER-t{turn_no}.md").write_text(body)
+            # Only persist a new ANSWER-t{n}.md when the content differs from the last one we
+            # saved. The very first turn always saves (last_answer.body is None).
+            answer_changed = body != last_answer["body"]
+            if answer_changed:
+                (snap_dir / f"ANSWER-t{turn_no}.md").write_text(body)
+                last_answer["body"] = body
             row = {
                 "turn": turn_no,
                 "ts": round(time.time(), 3),
@@ -304,6 +307,8 @@ def drive(job_dir, work_dir, agent_dir, corpus_dir, args, budget):
                 "tool_calls": count_tool_calls(log_path),
                 "answer_present": answer_present(work_dir),
                 "answer_chars": ans_chars,
+                "answer_changed": answer_changed,
+                "answer_snapshot": f"ANSWER-t{turn_no}.md" if answer_changed else None,
             }
             with open(turns_jsonl, "a") as fh:
                 fh.write(json.dumps(row) + "\n")
