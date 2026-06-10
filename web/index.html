@@ -26,7 +26,13 @@
   .fieldrow{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:18px}
   .fieldrow .btn{margin-left:auto}
   input[type=number]{width:120px;background:var(--bg);color:var(--fg);border:1px solid var(--line);padding:7px 8px;font:inherit}
-  input[type=file]{font:inherit;color:var(--mut)}
+  /* Custom file picker: native input hidden, label styled like a secondary button to match
+     the rest of the monospace/boxed UI. */
+  input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0 0 0 0)}
+  .filebtn{display:inline-flex;align-items:center;gap:8px}
+  .filebtn .pick{border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:7px 14px;cursor:pointer;font:inherit;white-space:nowrap}
+  .filebtn .pick:hover{background:var(--soft)}
+  .filebtn .fname{color:var(--mut);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:340px}
   .jobs{margin-top:36px;border-top:1px solid var(--line);padding-top:16px}
   .job{display:flex;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--soft);cursor:pointer}
   .job:hover{background:var(--fill)}
@@ -55,12 +61,16 @@
     </div>
     <div class="field">
       <label class="lbl" for="corpus">Corpus (.zip) <span style="text-transform:none;letter-spacing:0">— optional; defaults to the Jina corpus (blogs + papers + model cards)</span></label>
-      <input type="file" id="corpus" accept=".zip" />
+      <div class="filebtn">
+        <label class="pick" for="corpus">Choose file</label>
+        <input type="file" id="corpus" accept=".zip" />
+        <span class="fname" id="fname">no file selected — using default corpus</span>
+      </div>
     </div>
     <div class="fieldrow">
       <div>
-        <label class="lbl" for="budget">Input-token budget</label>
-        <input type="number" id="budget" value="300000" min="1000" step="10000" />
+        <label class="lbl" for="budget">Token budget</label>
+        <input type="number" id="budget" value="300000" min="1000" />
       </div>
       <button class="btn" type="submit" id="go">Run</button>
     </div>
@@ -74,6 +84,10 @@
 </div>
 <script>
 const $=id=>document.getElementById(id);
+$("corpus").addEventListener("change",()=>{
+  const f=$("corpus").files[0];
+  $("fname").textContent=f?f.name:"no file selected — using default corpus";
+});
 $("f").addEventListener("submit",async e=>{
   e.preventDefault();
   const prompt=$("prompt").value.trim(), file=$("corpus").files[0], budget=parseInt($("budget").value,10);

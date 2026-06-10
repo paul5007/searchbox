@@ -318,8 +318,10 @@ def trace_html(job_id: str):
     except Exception as e:
         raise HTTPException(500, f"pi --export failed: {e}")
     # No filename= -> Content-Disposition: inline, so the browser opens it in a new tab
-    # instead of downloading it.
-    return FileResponse(str(out), media_type="text/html")
+    # instead of downloading it. no-store so each click shows the freshly re-exported trace
+    # (we regenerate it above on every request), never a stale browser-cached copy.
+    return FileResponse(str(out), media_type="text/html",
+                        headers={"Cache-Control": "no-store, must-revalidate"})
 
 
 _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
