@@ -317,7 +317,9 @@ def trace_html(job_id: str):
                        env=env, capture_output=True, timeout=120, check=True)
     except Exception as e:
         raise HTTPException(500, f"pi --export failed: {e}")
-    return FileResponse(str(out), media_type="text/html", filename=f"trace-{job_id}.html")
+    # No filename= -> Content-Disposition: inline, so the browser opens it in a new tab
+    # instead of downloading it.
+    return FileResponse(str(out), media_type="text/html")
 
 
 _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
