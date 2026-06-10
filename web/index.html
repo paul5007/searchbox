@@ -47,12 +47,14 @@
   .icon:hover{background:var(--soft)}
   .icon[aria-disabled=true]{opacity:.3;pointer-events:none}
   .msg{margin-top:12px;color:var(--mut);font-size:12px}
+  .toggle{display:inline-flex;align-items:center;gap:7px;cursor:pointer;user-select:none;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+  .toggle input{width:14px;height:14px;accent-color:var(--fg);cursor:pointer}
+  #budgetwrap.off{opacity:.35;pointer-events:none}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="masthead"><h1>Searchbox</h1><span style="color:var(--mut);font-size:11px">closed-corpus · budget-bounded</span></div>
-  <p class="lede">Give a prompt, a <b>.zip</b> corpus, and an <b>input-token budget</b>. A self-hosted model in a minimal Pi harness explores the corpus with local jina retrieval (v5-text-small + reranker-v3, no web) until it has spent the budget, then writes a fully-cited answer.</p>
 
   <form id="f">
     <div class="field">
@@ -60,17 +62,20 @@
       <textarea id="prompt" placeholder="What question should be answered from the corpus?"></textarea>
     </div>
     <div class="field">
-      <label class="lbl" for="corpus">Corpus (.zip) <span style="text-transform:none;letter-spacing:0">— optional; defaults to the Jina corpus (blogs + papers + model cards)</span></label>
+      <label class="lbl" for="corpus">Corpus (.zip, optional)</label>
       <div class="filebtn">
         <label class="pick" for="corpus">Choose file</label>
         <input type="file" id="corpus" accept=".zip" />
-        <span class="fname" id="fname">no file selected — using default corpus</span>
+        <span class="fname" id="fname">default corpus</span>
       </div>
     </div>
     <div class="fieldrow">
-      <div>
-        <label class="lbl" for="budget">Token budget</label>
-        <input type="number" id="budget" value="300000" min="1000" />
+      <label class="toggle">
+        <input type="checkbox" id="force" checked />
+        <span>Force budget</span>
+      </label>
+      <div id="budgetwrap">
+        <input type="number" id="budget" value="100000" min="10000" step="10000" />
       </div>
       <button class="btn" type="submit" id="go">Run</button>
     </div>
@@ -86,14 +91,18 @@
 const $=id=>document.getElementById(id);
 $("corpus").addEventListener("change",()=>{
   const f=$("corpus").files[0];
-  $("fname").textContent=f?f.name:"no file selected — using default corpus";
+  $("fname").textContent=f?f.name:"default corpus";
+});
+$("force").addEventListener("change",()=>{
+  $("budgetwrap").classList.toggle("off",!$("force").checked);
 });
 $("f").addEventListener("submit",async e=>{
   e.preventDefault();
-  const prompt=$("prompt").value.trim(), file=$("corpus").files[0], budget=parseInt($("budget").value,10);
+  const prompt=$("prompt").value.trim(), file=$("corpus").files[0];
+  const force=$("force").checked, budget=parseInt($("budget").value,10)||100000;
   if(prompt.length<5){$("msg").textContent="prompt too short";return;}
   $("go").disabled=true;$("msg").textContent="queuing…";
-  const fd=new FormData();fd.append("prompt",prompt);fd.append("budget",budget);
+  const fd=new FormData();fd.append("prompt",prompt);fd.append("budget",budget);fd.append("force_budget",force?"true":"false");
   if(file)fd.append("corpus",file);
   try{
     const r=await fetch("/jobs",{method:"POST",body:fd});

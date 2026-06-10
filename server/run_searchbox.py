@@ -373,6 +373,10 @@ def drive(job_dir, work_dir, agent_dir, corpus_dir, args, budget):
             if turn >= args.max_turns:
                 stop_reason = "ceiling_turns"; break
 
+            # Force-budget OFF: stop after the model's first turn ends, no nudging.
+            if not args.force_budget:
+                stop_reason = "first_turn_done"; break
+
             if spent >= budget:
                 if answer_present(work_dir):
                     stop_reason = "budget_spent"; break
@@ -421,6 +425,12 @@ def main():
     ap.add_argument("--corpus", required=True)
     ap.add_argument("--out", default="./out")
     ap.add_argument("--budget", type=int, default=int(os.environ.get("INPUT_TOKEN_BUDGET", "500000")))
+    # Force-budget (default ON): budget is a FLOOR - keep nudging "Continue." until the input-token
+    # budget is spent, even if the model already wrote ANSWER.md. When OFF, we do NOT force the
+    # budget at all: the run stops right after the model's FIRST turn ends (one natural pass,
+    # whatever the model chose to do), no "Continue." nudges.
+    ap.add_argument("--force-budget", dest="force_budget", action="store_true", default=True)
+    ap.add_argument("--no-force-budget", dest="force_budget", action="store_false")
     ap.add_argument("--max-turns", type=int, default=int(os.environ.get("MAX_TURNS", "500")))
     ap.add_argument("--max-seconds", type=int, default=int(os.environ.get("MAX_SECONDS", "21600")))
     ap.add_argument("--turn-timeout", type=int, default=int(os.environ.get("TURN_TIMEOUT", "1200")))
@@ -472,7 +482,7 @@ def main():
             cs.terminate()
 
     spent = usage.get(BUDGET_METRIC, 0)
-    done = stop_reason == "budget_spent" and answer_present(work_dir)
+    done = stop_reason in ("budget_spent", "first_turn_done") and answer_present(work_dir)
     write_run_meta(job_dir, stop_reason=stop_reason, turns=turn, done=done,
                    budget=args.budget, budget_metric=BUDGET_METRIC,
                    input_tokens_spent=spent, budget_pct=round(100*spent/args.budget, 1) if args.budget else None,

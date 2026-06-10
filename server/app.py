@@ -59,6 +59,9 @@ def _run_one(job_id: str):
     cmd = [sys.executable, "-m", "server.run_searchbox",
            "--query", meta["query"], "--corpus", str(job_dir / "input.zip"),
            "--out", str(job_dir), "--budget", str(meta["budget"])]
+    # force_budget defaults ON; only add the off flag when explicitly disabled.
+    if meta.get("force_budget") is False:
+        cmd.append("--no-force-budget")
     env = dict(os.environ)
     for k in ("SEARCHBOX_TOOLS", "LLAMA_URL", "MODEL_ID", "CONTEXT_WINDOW",
               "EMBED_MODEL", "RERANK_MODEL", "BUDGET_METRIC",
@@ -149,6 +152,7 @@ DEFAULT_CORPUS = Path(os.environ.get(
 
 @app.post("/jobs")
 async def create(prompt: str = Form(...), budget: int = Form(...),
+                 force_budget: bool = Form(True),
                  corpus: UploadFile | None = File(None)):
     prompt = (prompt or "").strip()
     if len(prompt) < 5:
@@ -169,6 +173,7 @@ async def create(prompt: str = Form(...), budget: int = Form(...),
     (job_dir / "input.zip").write_bytes(data)
     with _cond:
         _jobs[job_id] = {"status": "queued", "query": prompt, "budget": budget,
+                         "force_budget": bool(force_budget),
                          "corpus_name": corpus_name, "corpus_bytes": len(data),
                          "submitted": time.time()}
         _queue.append(job_id)
