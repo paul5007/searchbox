@@ -5,17 +5,19 @@ model in a minimal [Pi](https://pi.dev) harness explores the corpus with local r
 (jina-embeddings-v5-text-small + jina-reranker-v3, no web) until it has spent the budget, then
 writes `ANSWER.md`.
 
-The point is to watch what a model does under a maximally restrained harness: given embedding
-search and a reranker but no instructions on how to use them, does it reach for them, or fall
-back to grep? So nothing the model sees prescribes method, format, or tool choice.
+The point is to watch what a model does under a maximally restrained harness: given raw atomic
+primitives (an embedder and a reranker) but no instructions on how to use them, does it compose
+them into a retrieval pipeline (embed -> store -> similarity search), or fall back to grep? So
+nothing the model sees prescribes method, format, or tool choice.
 
 ## How it works
 
 `server/run_searchbox.py` drives a `pi --mode rpc` session:
 
 1. The corpus is unzipped to `corpus/` (read-only; a single wrapper dir is stripped). The
-   sidecar (`server/corpus_service.py`) indexes **nothing** at boot - `semantic_search` embeds
-   on the fly over whatever scope the model asks for, so the model decides if/when/how to index.
+   sidecar (`server/corpus_service.py`) indexes **nothing** at boot - it exposes only atomic
+   model primitives (`sentence_embed`, `passage_rerank`), so the model decides if/when/how to
+   embed, store, and search.
 2. The task is sent once as `/skill:searchbox <question>`. Pi runs its own loop and its own
    compaction, untouched. The only thing added over vanilla Pi: while the budget is unspent and
    Pi goes idle, send a bare `Continue.`.
@@ -35,7 +37,7 @@ Every piece of model-facing text, and nothing else:
 | Task delivery | [`TASK_COMMAND`](server/run_searchbox.py#L183) — `/skill:searchbox <q>`; Pi expands it to the full SKILL.md body + question, which guarantees the skill is loaded (otherwise only its name/description is in context) |
 | Keep-going nudge | [`KEEP_GOING`](server/run_searchbox.py#L186-L188) — `Continue. (input tokens used: x/y)` |
 | Final-answer nudge | [run_searchbox.py#L330](server/run_searchbox.py#L330) — `Write your answer to ANSWER.md now.` (only if budget spent but no `ANSWER.md`) |
-| `semantic_search` | [corpus-search.ts#L51-L63](pi/extensions/corpus-search.ts#L51-L63) — find passages by meaning; embeds on the fly over the whole corpus or just `paths` the model names; nothing is pre-indexed |
+| `sentence_embed` | [corpus-search.ts](pi/extensions/corpus-search.ts) — embed text(s) with jina-embeddings-v5-text-small; APPENDS vectors to a jsonl in the work dir and returns only {path,count,dim}; the model reads the file back and does its own similarity/search |
 | `passage_rerank` | [corpus-search.ts#L85-L87](pi/extensions/corpus-search.ts#L85-L87) — re-order passages you supply by relevance |
 
 Built-in Pi tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) keep Pi's stock
@@ -48,7 +50,7 @@ before Pi starts, and every ablation run must begin from an identical corpus.
 server/corpus_service.py   FastAPI sidecar: /search, /rerank, /stats
 server/run_searchbox.py    orchestrator: unzip -> embed -> drive Pi -> stop on budget
 server/app.py + web/       upload UI + live dashboard
-pi/extensions/corpus-search.ts   semantic_search + passage_rerank (gated by SEARCHBOX_TOOLS)
+pi/extensions/corpus-search.ts   sentence_embed + passage_rerank (gated by SEARCHBOX_TOOLS)
 pi/skills/searchbox/SKILL.md     the task
 scripts/run.sh             one-shot CLI run
 scripts/ablate.py          ablation sweep
@@ -74,7 +76,7 @@ Everything is an env knob — no code edits:
 
 | Knob | Ablates |
 | --- | --- |
-| `SEARCHBOX_TOOLS` | tools the model gets: `semantic_search,passage_rerank` / `semantic_search` / `passage_rerank` / `` (none) |
+| `SEARCHBOX_TOOLS` | tools the model gets: `sentence_embed,passage_rerank` / `sentence_embed` / `passage_rerank` / `` (none) |
 | `LLAMA_URL` + `MODEL_ID` + `CONTEXT_WINDOW` | the base LLM |
 | `EMBED_MODEL` / `RERANK_MODEL` | the retrieval models |
 | `INPUT_TOKEN_BUDGET` | the budget |

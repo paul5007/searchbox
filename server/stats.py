@@ -142,7 +142,11 @@ def _iter_events(log_path: Path):
 def _summarize(tool: str, args) -> str:
     a = args if isinstance(args, dict) else {}
     try:
-        if tool == "semantic_search":
+        if tool == "sentence_embed":
+            texts = a.get("texts")
+            n = len(texts) if isinstance(texts, list) else (1 if texts else 0)
+            return f"embed {n} text(s) role={a.get('role','passage')}".strip()
+        if tool == "semantic_search":  # legacy runs
             return f"search {str(a.get('query',''))[:80]}".strip()
         if tool == "passage_rerank":
             return f"rerank {str(a.get('query',''))[:80]}".strip()

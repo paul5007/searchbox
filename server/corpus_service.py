@@ -52,6 +52,10 @@ EMBED_TASK = os.environ.get("EMBED_TASK", "retrieval")
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1400"))
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "180"))
 
+# Where /embed writes its jsonl output. This is the model's sandbox cwd (parent of corpus/), so
+# the model can read the file back with a plain relative path (cat / python). Falls back to CWD.
+WORK_DIR = os.environ.get("WORK_DIR") or os.path.dirname(CORPUS_DIR) or os.getcwd()
+
 
 def _api_post(path: str, payload: dict) -> dict:
     req = urllib.request.Request(
@@ -309,6 +313,49 @@ async def search(req: Request):
         "text": meta[i]["text"],
     } for i in order]
     return {"results": results, "scope_chunks": int(embs.shape[0]), "scope_files": len(files)}
+
+
+@app.post("/embed")
+async def embed(req: Request):
+    """Atomic embedding primitive: embed caller-supplied texts and APPEND the vectors to a jsonl
+    file in the model's working directory. Returns only metadata (path, count, dim) - NOT the
+    vectors themselves, which would blow up the context. The model reads the jsonl back with its
+    own tools (cat/python) and decides how to use the embeddings (similarity, clustering, etc).
+
+    body: {texts: [str], role?: "query"|"passage" (default passage), out?: filename}
+    Each jsonl line: {"i": <index in this call>, "text": <input text>, "role": <role>,
+                      "dim": <D>, "embedding": [floats]}  (L2-normalized, so dot == cosine)
+    return: {path, relpath, count, dim, role, appended} or {error}
+    """
+    body = await req.json()
+    texts = body.get("texts")
+    if isinstance(texts, str):
+        texts = [texts]
+    if not isinstance(texts, list) or not texts or not all(isinstance(t, str) for t in texts):
+        return {"error": "texts must be a non-empty array of strings"}
+    role = (body.get("role") or "passage").lower()
+    if role not in ("query", "passage"):
+        role = "passage"
+    # Output file: model-chosen name (basename only, no traversal) else a stable default.
+    out_name = os.path.basename(str(body.get("out") or "embeddings.jsonl")) or "embeddings.jsonl"
+    out_path = os.path.join(WORK_DIR, out_name)
+
+    embs = _encode(texts, role=role)
+    dim = int(embs.shape[1]) if embs.ndim == 2 and embs.shape[0] else 0
+    appended = 0
+    with open(out_path, "a") as fh:
+        for i, (t, v) in enumerate(zip(texts, embs)):
+            fh.write(json.dumps({
+                "i": i, "text": t, "role": role, "dim": dim,
+                "embedding": [round(float(x), 6) for x in v.tolist()],
+            }) + "\n")
+            appended += 1
+    try:
+        rel = os.path.relpath(out_path, WORK_DIR)
+    except Exception:
+        rel = out_name
+    return {"path": out_path, "relpath": rel, "count": appended, "dim": dim, "role": role,
+            "appended": appended}
 
 
 @app.post("/rerank")

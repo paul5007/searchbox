@@ -23,7 +23,7 @@ fields pi uses (input/output/cacheRead/cacheWrite). The BUDGET is measured again
 
 ABLATION (all via env, no code edits):
   base model : LLAMA_URL / MODEL_ID / CONTEXT_WINDOW
-  tools      : SEARCHBOX_TOOLS="corpus_search,corpus_rerank" | "corpus_search" | "" (none)
+  tools      : SEARCHBOX_TOOLS="sentence_embed,passage_rerank" | "sentence_embed" | "" (none)
   retrieval  : EMBED_MODEL / RERANK_MODEL
   budget     : INPUT_TOKEN_BUDGET, and BUDGET_METRIC (default "input")
 """
@@ -73,6 +73,8 @@ def boot_corpus(job_dir: Path, corpus_dir: Path, port: int) -> subprocess.Popen:
     env["CORPUS_DIR"] = str(corpus_dir)
     env["CORPUS_PORT"] = str(port)
     env["CORPUS_CACHE_DIR"] = str(job_dir / ".corpus_cache")
+    # /embed writes jsonl here; this is pi's cwd (parent of corpus/), readable by the model.
+    env["WORK_DIR"] = str(corpus_dir.parent)
     logf = open(job_dir / "corpus.log", "a")
     logf.write(f"\n===== CORPUS SIDECAR @ {time.ctime()} =====\n"); logf.flush()
     proc = subprocess.Popen([sys.executable, str(HERE / "corpus_service.py")],
