@@ -148,7 +148,7 @@ def _summarize(tool: str, args) -> str:
             return f"rerank {str(a.get('query',''))[:80]}".strip()
         if tool == "bash":
             cmd = re.sub(r"\s+", " ", str(a.get("command") or a.get("cmd") or "")).strip()
-            return f"bash {cmd[:90]}".strip()
+            return f"$ {cmd[:400]}".strip()
         if tool in ("read", "write", "edit"):
             return f"{tool} {str(a.get('path') or a.get('file') or '')[:80]}".strip()
     except Exception:
@@ -197,8 +197,8 @@ def parse_pi_log(log_path: Path) -> dict:
             txt = (ev.get("message") or {}).get("text") or ev.get("text")
             if txt:
                 recent.append({"turn": turns, "tool": "say", "text": str(txt)[:120]})
-        if len(recent) > 14:
-            recent = recent[-14:]
+        if len(recent) > 60:
+            recent = recent[-60:]
         if len(errors) > 50:
             errors = errors[-50:]
     return {

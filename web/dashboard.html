@@ -65,6 +65,7 @@
   .feed li{display:flex;gap:8px;padding:1px 0;white-space:nowrap;min-width:0}
   .feed li .t{color:var(--mut);width:42px;flex:none}
   .feed li .v{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .feed li:hover .v{white-space:normal;overflow:visible;word-break:break-all}
   .feed li.live .v{font-weight:600;white-space:normal;overflow:visible}
   .errs{margin:0;list-style:none;padding:0;max-height:min(30vh,260px);overflow:auto;font-size:12px}
   .errs li{border-left:3px solid var(--line);padding:2px 0 2px 8px;margin:3px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -308,7 +309,7 @@ async function tick(){
 
     // activity
     const rec=d.recent||[];let pt=null;
-    $("feed").innerHTML=rec.length?rec.map((e,i)=>{const tn=e.turn||0,tc=tn===pt?'':'t'+tn;pt=tn;const nw=i===rec.length-1;return `<li class="${nw&&live?'live':''}"><span class="t">${tc}</span><span class="v">${nw&&live?'<span class="dot on blink"></span>':''}${esc(e.tool==='say'?'· '+e.text:e.text)}</span></li>`;}).join(""):'<li class="empty">waiting…</li>';
+    $("feed").innerHTML=rec.length?rec.map((e,i)=>{const tn=e.turn||0,tc=tn===pt?'':'t'+tn;pt=tn;const nw=i===rec.length-1;const txt=e.tool==='say'?'· '+e.text:e.text;return `<li class="${nw&&live?'live':''}" title="${esc(e.text)}"><span class="t">${tc}</span><span class="v">${nw&&live?'<span class="dot on blink"></span>':''}${esc(txt)}</span></li>`;}).join(""):'<li class="empty">waiting…</li>';
     const fe=$("feed");fe.scrollTop=fe.scrollHeight;
     if(rec.length){const e=rec[rec.length-1];$("nowline").innerHTML=`<span class="dot on${live?' blink':''}"></span><span class="t">t${e.turn||0}</span>`+esc(e.text);}
 
