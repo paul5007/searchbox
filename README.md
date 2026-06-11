@@ -65,7 +65,7 @@ scripts/ablate.py          ablation sweep
 cp .env.example .env          # point LLAMA_URL at your OpenAI-compatible model server
 uv venv --python 3.11 .venv
 uv pip install --python .venv/bin/python torch -r server/requirements.txt huggingface-hub
-npm install -g @earendil-works/pi-coding-agent@0.78.0
+npm install -g @earendil-works/pi-coding-agent@0.79.1   # pinned; see PI_VERSION
 
 bash scripts/run.sh "Where is auth handled?" ./dataroom.zip 300000 ./out
 cat ./out/ANSWER.md
