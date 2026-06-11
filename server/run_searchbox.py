@@ -393,9 +393,10 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
             cf = job_dir / "control"
             if cf.exists():
                 ctl = cf.read_text(errors="ignore").strip()
-                if ctl in ("cancel", "pause"):
-                    stop_reason = ctl if ctl == "paused" else "cancelled"
-                    stop_reason = "paused" if ctl == "pause" else "cancelled"; break
+                # 'pause' = system preempt, 'hold' = user pause; both checkpoint to paused. 'cancel' legacy.
+                if ctl in ("cancel", "pause", "hold"):
+                    stop_reason = "cancelled" if ctl == "cancel" else "paused"
+                    break
 
             spent, usage = spent_now()
             elapsed = time.time() - start

@@ -59,6 +59,23 @@ scripts/run.sh             one-shot CLI run
 scripts/ablate.py          ablation sweep
 ```
 
+## Scheduling (single slot)
+
+One llama slot, so jobs run serially:
+
+- Foreground FIFO: fresh submits and explicit resumes run oldest-first.
+- Preemption: a new foreground job preempts whatever is running (including another foreground job)
+  and takes the slot now (`PREEMPT_FOREGROUND=1`). The preempted job returns to the pool and
+  resumes ahead of bulk backfill.
+- Auto-backfill: when nothing is queued, the oldest paused job is auto-resumed (`--continue`) to
+  keep the slot busy (`AUTO_BACKFILL=1`); such a run is preemptible.
+- Pause is sticky: `POST /jobs/{id}/pause` -> `held`; it is NOT auto-resumed, only an explicit
+  `POST /jobs/{id}/resume` revives it. (System preemption uses a separate, preemptible `paused`
+  state.)
+
+State survives an app restart: mid-flight jobs return to the resumable pool, user-held jobs stay held.
+Scheduler logic is covered by `tests/test_scheduler.py` (no GPU needed).
+
 ## Get started
 
 ```bash

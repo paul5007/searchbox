@@ -252,7 +252,9 @@ const STOP={
   ceiling_seconds:["stop","STOPPED — wall-clock ceiling"],
   ceiling_turns:["stop","STOPPED — turn ceiling"],
   error_dataroom_boot:["err","ERROR — dataroom sidecar failed to start"],
-  cancelled:["stop","CANCELLED"],paused:["stop","PAUSED"],
+  cancelled:["stop","CANCELLED"],
+  paused:["stop","PAUSED — preempted to free the slot; auto-resumes when idle, or resume now"],
+  held:["stop","HELD — you paused this; it stays paused until you resume it"],
 };
 function setStatus(s,done){
   const el=$("st");
@@ -260,6 +262,7 @@ function setStatus(s,done){
   else if(s==="running")el.innerHTML='<span class="dot on blink"></span>running';
   else if(s==="stopped")el.innerHTML='<span class="dot on"></span>stopped';
   else if(s==="failed")el.innerHTML='<span class="dot on"></span>failed';
+  else if(s==="held")el.innerHTML='<span class="dot"></span>held';
   else el.innerHTML='<span class="dot"></span>'+(s||"queued");
 }
 
