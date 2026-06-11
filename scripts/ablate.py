@@ -15,13 +15,13 @@ The reserved ablation knobs (no code edits needed to vary any of these):
   CONTEXT_WINDOW    context window for the chosen model.
   EMBED_MODEL       retrieval embedder (e.g. v5-text-small vs v5-text-nano).
   RERANK_MODEL      cross-encoder reranker.
-  INPUT_TOKEN_BUDGET   the spend floor.
+  TURN_BUDGET       the budget, in turns.
 
 Define the matrix in a JSON file (see config/ablations.example.json) or use the built-in
 default matrix (tool ablation). Example:
 
   python -m scripts.ablate --query "..." --dataroom path/to/dataroom.zip \\
-      --budget 300000 --matrix config/ablations.example.json --out runs/exp1
+      --budget 30 --matrix config/ablations.example.json --out runs/exp1
 
 Results: runs/exp1/<config_name>/ holds the full job (ANSWER.md, NOTES.md, pi.log, run_meta.json);
 runs/exp1/results.jsonl has one summary row per config.
@@ -64,8 +64,6 @@ def run_one(cfg, args, exp_dir: Path) -> dict:
            "--out", str(job_dir), "--budget", budget]
     if args.max_seconds:
         cmd += ["--max-seconds", str(args.max_seconds)]
-    if args.max_turns:
-        cmd += ["--max-turns", str(args.max_turns)]
 
     print(f"\n=== ablation: {name}  env={cfg.get('env')}  budget={budget} ===", flush=True)
     t0 = time.time()
@@ -89,10 +87,10 @@ def run_one(cfg, args, exp_dir: Path) -> dict:
         "wall_seconds": round(time.time() - t0, 1),
         "stop_reason": meta.get("stop_reason"),
         "done": meta.get("done"),
-        "budget": meta.get("budget"),
-        "budget_metric": meta.get("budget_metric"),
-        "input_tokens_spent": meta.get("input_tokens_spent"),
+        "budget": meta.get("budget"),                 # in turns
         "budget_pct": meta.get("budget_pct"),
+        "token_metric": meta.get("token_metric"),
+        "tokens_spent": meta.get("tokens_spent"),
         "tokens_input": tokens.get("input"),
         "tokens_output": tokens.get("output"),
         "tokens_cacheRead": tokens.get("cacheRead"),
@@ -106,7 +104,7 @@ def run_one(cfg, args, exp_dir: Path) -> dict:
         "model_id": meta.get("model_id"),
         "tools_enabled": meta.get("tools_enabled"),
     }
-    print(f"=== {name}: stop={row['stop_reason']} spent={row['input_tokens_spent']}/{row['budget']} "
+    print(f"=== {name}: stop={row['stop_reason']} turns={row['turns']}/{row['budget']} "
           f"tools={row['tool_calls']} answer={row['answer_bytes']}B ===", flush=True)
     return row
 
@@ -115,11 +113,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--query", required=True)
     ap.add_argument("--dataroom", required=True)
-    ap.add_argument("--budget", type=int, default=int(os.environ.get("INPUT_TOKEN_BUDGET", "300000")))
+    ap.add_argument("--budget", type=int, default=int(os.environ.get("TURN_BUDGET", "30")))
     ap.add_argument("--matrix", help="JSON file with the ablation matrix; default = tool ablation")
     ap.add_argument("--out", default="./runs/ablation")
     ap.add_argument("--max-seconds", type=int, default=0)
-    ap.add_argument("--max-turns", type=int, default=0)
     args = ap.parse_args()
 
     matrix = load_matrix(args.matrix)
@@ -136,9 +133,9 @@ def main():
             rf.flush()
 
     print(f"\n===== ablation summary ({len(rows)} configs) =====")
-    print(f"{'config':<16}{'stop_reason':<20}{'spent/budget':<18}{'tools':<8}{'answerB':<9}")
+    print(f"{'config':<16}{'stop_reason':<20}{'turns/budget':<18}{'tools':<8}{'answerB':<9}")
     for r in rows:
-        sb = f"{r['input_tokens_spent']}/{r['budget']}"
+        sb = f"{r['turns']}/{r['budget']}"
         print(f"{r['name']:<16}{str(r['stop_reason']):<20}{sb:<18}"
               f"{str(r['tool_calls']):<8}{str(r['answer_bytes']):<9}")
     print(f"\nresults.jsonl -> {results_path}")

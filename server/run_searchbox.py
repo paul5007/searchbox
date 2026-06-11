@@ -1,31 +1,36 @@
 #!/usr/bin/env python3
 """Orchestrator: run one searchbox job on a minimal Pi harness.
 
-Inputs: a PROMPT, a DATAROOM (.zip or folder), an INPUT-TOKEN BUDGET.
+Inputs: a PROMPT, a DATAROOM (.zip or folder), and a BUDGET in TURNS.
 The agent answers the prompt grounded ONLY in the dataroom, using two local-only retrieval tools
 (jina-embeddings-v5-text-small + jina-reranker-v3 over the dataroom). No web.
 
 DESIGN: keep it minimal. Pi is already a complete agent (it loops, calls tools, and
 auto-compacts its own context). We add exactly ONE thing on top of vanilla Pi: do not let the
-run finish until it has SPENT the input-token budget. So this file only:
+run finish until it has used its BUDGET of turns. So this file only:
   1. unzips the dataroom + boots the retrieval sidecar,
   2. sends the task once,
-  3. re-nudges ("keep going") each time Pi goes idle while the budget is unspent,
-  4. stops when budget is spent and ANSWER.md exists.
+  3. re-nudges ("keep going") each time Pi goes idle while turns remain,
+  4. stops when the turn budget is used and ANSWER.md exists.
 No STATUS files, no saturation/consolidation machinery, no extra prompt scaffolding.
 
-TOKEN ACCOUNTING (verified against pi source): pi has no cumulative counter, and
-get_session_stats sums only in-memory messages, which compaction prunes - so it UNDERCOUNTS a
+BUDGET = NUMBER OF TURNS. A "turn" is one agent cycle (one Continue. nudge -> agent works -> idle).
+We stop at `turn >= budget`. Turns are user-legible and the only thing we can cleanly stop on at a
+cycle boundary (we cannot interrupt mid-turn anyway).
+
+TOKEN ACCOUNTING (still recorded every turn, just not the budget): pi has no cumulative counter,
+and get_session_stats sums only in-memory messages, which compaction prunes - so it UNDERCOUNTS a
 long run. The session JSONL is append-only (compaction only appends a summary; it never deletes
 the assistant entries that carry usage), so we sum usage from the session file. We use the SAME
-fields pi uses (input/output/cacheRead/cacheWrite). The BUDGET is measured against `input`
-(fresh prefill tokens the model actually processed); all four components are recorded for the UI.
+fields pi uses (input/output/cacheRead/cacheWrite) and persist them per-turn (turns.jsonl) and in
+run_meta.json for the UI - the experiment still sees token cost per turn; it just isn't the stop
+condition.
 
 ABLATION (all via env, no code edits):
   base model : LLAMA_URL / MODEL_ID / CONTEXT_WINDOW
   tools      : SEARCHBOX_TOOLS="sentence_embed,passage_rerank" | "sentence_embed" | "" (none)
   retrieval  : EMBED_MODEL / RERANK_MODEL
-  budget     : INPUT_TOKEN_BUDGET, and BUDGET_METRIC (default "input")
+  budget     : TURN_BUDGET (number of turns)
 """
 import argparse, json, os, subprocess, sys, time, zipfile, signal, socket, threading, urllib.request, urllib.error, shutil
 from pathlib import Path
@@ -33,7 +38,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 
-# Which session-usage field the budget is measured against. Default: fresh prefill ("input").
+# Which session-usage field the per-turn TOKEN ACCOUNTING reports (informational only; the budget
+# is now a TURN count). Default: fresh prefill ("input").
 BUDGET_METRIC = os.environ.get("BUDGET_METRIC", "input")
 
 
@@ -303,10 +309,11 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
                 "turn": turn_no,
                 "ts": round(time.time(), 3),
                 "elapsed_seconds": round(elapsed, 1),
-                "budget": budget,
-                "budget_metric": BUDGET_METRIC,
-                "spent": spent,
-                "budget_pct": round(100 * spent / budget, 2) if budget else None,
+                "budget": budget,                    # budget is now in TURNS
+                "budget_pct": round(100 * turn_no / budget, 2) if budget else None,
+                # per-turn TOKEN ACCOUNTING (informational; no longer the stop condition)
+                "token_metric": BUDGET_METRIC,
+                "tokens_spent": spent,
                 "tokens": usage,
                 "tool_calls": count_tool_calls(log_path),
                 "answer_present": answer_present(work_dir),
@@ -401,22 +408,21 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
             spent, usage = spent_now()
             elapsed = time.time() - start
             snapshot(turn, spent, usage, elapsed)
-            print(f"[searchbox] cycle {turn} {BUDGET_METRIC}={spent}/{budget} "
-                  f"({round(100*spent/budget,1) if budget else 0}%) "
+            print(f"[searchbox] cycle {turn}/{budget} turns "
+                  f"({round(100*turn/budget,1) if budget else 0}%) "
+                  f"{BUDGET_METRIC}_tokens={spent} "
                   f"tools={count_tool_calls(log_path)} ans={answer_present(work_dir)}", flush=True)
 
             if elapsed > args.max_seconds:
                 stop_reason = "ceiling_seconds"; break
-            if turn >= args.max_turns:
-                stop_reason = "ceiling_turns"; break
 
             # We captured this turn's answer above (ANSWER.md = model's final message text).
             # Force-budget OFF: one natural pass is enough -> stop now.
             if not args.force_budget:
                 stop_reason = "first_turn_done"; break
 
-            # Force-budget ON: keep going until the input-token budget is spent.
-            if spent >= budget:
+            # Force-budget ON: keep going until the TURN budget is used up.
+            if turn >= budget:
                 stop_reason = "budget_spent"; break
 
             send({"type": "prompt", "message": KEEP_GOING})
@@ -459,21 +465,21 @@ def main():
     ap.add_argument("--query", required=True)
     ap.add_argument("--dataroom", required=True)
     ap.add_argument("--out", default="./out")
-    ap.add_argument("--budget", type=int, default=int(os.environ.get("INPUT_TOKEN_BUDGET", "500000")))
-    # Force-budget (default ON): budget is a FLOOR - keep nudging "Continue." until the input-token
-    # budget is spent, even if the model already wrote ANSWER.md. When OFF, we do NOT force the
-    # budget at all: the run stops right after the model's FIRST turn ends (one natural pass,
-    # whatever the model chose to do), no "Continue." nudges.
+    # --budget is the TURN budget: how many agent cycles to run (force-budget ON).
+    ap.add_argument("--budget", type=int, default=int(os.environ.get("TURN_BUDGET", "30")))
+    # Force-budget (default ON): budget is a FLOOR - keep nudging "Continue." until the turn
+    # budget is used, even if the model already wrote ANSWER.md. When OFF, the run stops right
+    # after the model's FIRST turn ends (one natural pass), no "Continue." nudges.
     ap.add_argument("--force-budget", dest="force_budget", action="store_true", default=True)
     ap.add_argument("--no-force-budget", dest="force_budget", action="store_false")
     # Resume a previously-paused/preempted run: keep the on-disk dataroom + pi session, continue.
     ap.add_argument("--resume", action="store_true", default=False)
-    ap.add_argument("--max-turns", type=int, default=int(os.environ.get("MAX_TURNS", "500")))
+    # Wall-clock safety backstop only (the turn budget is the real stop condition).
     ap.add_argument("--max-seconds", type=int, default=int(os.environ.get("MAX_SECONDS", "21600")))
     ap.add_argument("--turn-timeout", type=int, default=int(os.environ.get("TURN_TIMEOUT", "1200")))
     args = ap.parse_args()
     if args.budget < 1:
-        print("ERROR: --budget must be >= 1", file=sys.stderr); sys.exit(2)
+        print("ERROR: --budget (turns) must be >= 1", file=sys.stderr); sys.exit(2)
 
     signal.signal(signal.SIGTERM, lambda *_a: (_ for _ in ()).throw(KeyboardInterrupt()))
 
@@ -524,16 +530,17 @@ def main():
     spent = usage.get(BUDGET_METRIC, 0)
     done = stop_reason in ("budget_spent", "first_turn_done") and answer_present(work_dir)
     write_run_meta(job_dir, stop_reason=stop_reason, turns=turn, done=done,
-                   budget=args.budget, budget_metric=BUDGET_METRIC,
-                   input_tokens_spent=spent, budget_pct=round(100*spent/args.budget, 1) if args.budget else None,
+                   budget=args.budget,                    # budget is in TURNS
+                   budget_pct=round(100*turn/args.budget, 1) if args.budget else None,
+                   token_metric=BUDGET_METRIC, tokens_spent=spent,
                    tokens=usage, answer_present=answer_present(work_dir),
                    tool_calls=count_tool_calls(job_dir / "pi.log"),
                    elapsed_seconds=round(time.time() - start, 1),
                    tools_enabled=os.environ.get("SEARCHBOX_TOOLS", "all"),
                    model_id=os.environ.get("MODEL_ID", "qwen3.6"))
-    print(f"[searchbox] done (stop_reason={stop_reason}, {BUDGET_METRIC}={spent}/{args.budget})")
+    print(f"[searchbox] done (stop_reason={stop_reason}, turns={turn}/{args.budget})")
     print(json.dumps({"out": str(job_dir), "turns": turn, "done": done,
-                      "stop_reason": stop_reason, "tokens": usage, "budget": args.budget,
+                      "stop_reason": stop_reason, "tokens": usage, "budget_turns": args.budget,
                       "answer": str(work_dir / "ANSWER.md")}))
 
 

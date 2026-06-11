@@ -1,9 +1,9 @@
 # Searchbox
 
-Give it a **prompt**, a **`.zip`** (or folder), and an **input-token budget**. A self-hosted
-model in a minimal [Pi](https://pi.dev) harness explores the dataroom with local retrieval
-(jina-embeddings-v5-text-small + jina-reranker-v3, no web) until it has spent the budget, then
-answers (`ANSWER.md`).
+Give it a **prompt**, a **`.zip`** (or folder), and a **turn budget**. A self-hosted model in a
+minimal [Pi](https://pi.dev) harness explores the dataroom with local retrieval
+(jina-embeddings-v5-text-small + jina-reranker-v3, no web) for that many turns, then answers
+(`ANSWER.md`). Token cost is recorded per turn but is not the stop condition.
 
 The point is to watch what a model does under a maximally restrained harness: given atomic
 primitives (an embedder, a reranker) but no instruction on how to use them, does it compose them
@@ -26,8 +26,10 @@ model sees prescribes which tool to use or how.
    the budget is unspent and Pi goes idle, send a bare `Continue.`. As a backstop the harness
    also captures the model's final non-thinking message to `ANSWER.md` each turn, so there is an
    answer even if the model never wrote the file itself (it never clobbers a model-written one).
-4. Force-budget ON (default): run until the input-token budget is spent. OFF: stop after the
-   first turn. `run_meta.json` records stop reason, token breakdown, tool calls, and config.
+4. Force-budget ON (default): run until the turn budget is used (one turn = one `Continue.` ->
+   agent works -> idle). OFF: stop after the first turn. `run_meta.json` records stop reason,
+   turns, per-turn token breakdown, tool calls, and config. (We stop at a turn boundary because a
+   run cannot be cleanly interrupted mid-turn anyway, and turns are the user-legible unit.)
 
 ## Tools
 
@@ -67,8 +69,8 @@ uv venv --python 3.11 .venv
 uv pip install --python .venv/bin/python torch -r server/requirements.txt huggingface-hub
 npm install -g @earendil-works/pi-coding-agent@0.79.1   # pinned; see PI_VERSION
 
-# one-shot CLI: prompt, dataroom, budget, outdir
-bash scripts/run.sh "Where is auth handled?" ./dataroom.zip 300000 ./out
+# one-shot CLI: prompt, dataroom, budget(turns), outdir
+bash scripts/run.sh "Where is auth handled?" ./dataroom.zip 30 ./out
 cat ./out/ANSWER.md
 ```
 
@@ -104,10 +106,10 @@ Everything is an env knob - no code edits:
 | `EMBED_BACKEND` / `RERANK_BACKEND` | retrieval on local weights vs Jina API |
 | `LLAMA_URL` + `MODEL_ID` + `CONTEXT_WINDOW` | the base LLM |
 | `EMBED_MODEL` / `RERANK_MODEL` | the retrieval models |
-| `INPUT_TOKEN_BUDGET` | the budget |
+| `TURN_BUDGET` | the budget, in turns |
 
 ```bash
-python -m scripts.ablate --query "..." --dataroom ./dataroom.zip --budget 300000 \
+python -m scripts.ablate --query "..." --dataroom ./dataroom.zip --budget 30 \
   --matrix config/ablations.example.json --out ./runs/exp1
 cat ./runs/exp1/results.jsonl    # one row per config
 ```
@@ -116,8 +118,10 @@ Default matrix (omit `--matrix`): `full`, `search_only`, `rerank_only`, `no_tool
 
 ## Token accounting
 
-The budget is measured against **`input`** (fresh prefill tokens); the UI also shows `output`,
-`cacheRead`, `cacheWrite`, `total`. Change the budgeted field with `BUDGET_METRIC`.
+The budget is a turn count, but per-turn token cost is still recorded (`turns.jsonl`,
+`run_meta.json`, the dashboard). The reported field is **`input`** (fresh prefill tokens); the UI
+also shows `output`, `cacheRead`, `cacheWrite`, `total`. Change the reported field with
+`BUDGET_METRIC`.
 
 Source of truth is the append-only Pi session file, summed over assistant-message `usage`. Pi's
 `get_session_stats` sums only in-memory messages, which compaction prunes, so it undercounts a

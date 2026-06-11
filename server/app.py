@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Searchbox API + UI.
 
-POST /jobs        (multipart: prompt, budget, dataroom=<zipfile>)  -> {job_id}
+POST /jobs        (multipart: prompt, budget=<turns>, dataroom=<zipfile>)  -> {job_id}
 GET  /jobs                         -> list
 GET  /jobs/{id}                    -> status
 GET  /jobs/{id}/stats              -> live metrics (drives the dashboard)
@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
 import uvicorn
 
-from server.stats import job_stats, session_usage, BUDGET_METRIC
+from server.stats import job_stats, session_usage, parse_pi_log, BUDGET_METRIC
 
 HERE = Path(__file__).resolve().parent
 WEB = HERE.parent / "web"
@@ -333,7 +333,7 @@ async def create(prompt: str = Form(...), budget: int = Form(...),
     if len(prompt) < 5:
         raise HTTPException(400, "prompt too short")
     if budget < 1:
-        raise HTTPException(400, "budget must be >= 1")
+        raise HTTPException(400, "budget (turns) must be >= 1")
     # `tools` is a comma-separated list of external tools to register for this job (subset of
     # sentence_embed, passage_rerank, semantic_search). Empty string => no external tools (pi
     # built-ins only). None/missing => leave unset (extension uses its DEFAULT_TOOLS).
@@ -450,22 +450,23 @@ def list_jobs():
             meta = dict(_jobs.get(jid, {})) or _load_meta(jid)
         job_dir = JOBS / jid
         rm = job_dir / "run_meta.json"
+        # budget + progress are TURN-based now. spent = turns done, target = turn budget.
         spent = pct = 0
         bdg = meta.get("budget")
         if rm.exists():
             # finished job: authoritative final numbers from run_meta
             try:
                 m = json.loads(rm.read_text())
-                spent = m.get("input_tokens_spent", 0)
+                spent = m.get("turns", 0)
                 bdg = bdg or m.get("budget")
                 pct = m.get("budget_pct") or 0
             except Exception:
                 pass
         else:
-            # running/queued: read live spend from the append-only session file so the homepage
-            # progress bar tracks in real time (run_meta only exists once the job ends).
+            # running/queued: count turns live from pi.log so the homepage bar tracks in real time
+            # (run_meta only exists once the job ends).
             try:
-                spent = session_usage(job_dir).get(BUDGET_METRIC, 0)
+                spent = parse_pi_log(job_dir / "pi.log").get("turns", 0)
                 if bdg:
                     pct = round(min(100, 100 * spent / bdg), 1)
             except Exception:
@@ -474,7 +475,7 @@ def list_jobs():
                      "stop_reason": meta.get("stop_reason"),
                      "auto": bool(meta.get("auto")), "preempted": bool(meta.get("preempted")),
                      "query": (meta.get("query") or "")[:200],
-                     "budget": bdg, "spent": spent, "percent": pct,
+                     "budget": bdg, "spent": spent, "percent": pct, "unit": "turns",
                      "started": meta.get("started"), "finished": meta.get("finished")})
     rows.sort(key=lambda r: (r.get("started") or 0), reverse=True)
     return {"jobs": rows}

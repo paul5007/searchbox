@@ -107,12 +107,12 @@
 
   <div class="banner" id="banner"></div>
   <div class="query">QUERY&nbsp;&nbsp;<b id="q">—</b></div>
-  <div class="cfg">MODEL <b id="model">—</b> &nbsp;·&nbsp; TOOLS <b id="tools">—</b> &nbsp;·&nbsp; BUDGET METRIC <b id="bmetric">input</b></div>
+  <div class="cfg">MODEL <b id="model">—</b> &nbsp;·&nbsp; TOOLS <b id="tools">—</b> &nbsp;·&nbsp; TOKEN METRIC <b id="bmetric">input</b></div>
 
   <div class="hero">
     <div class="prog">
-      <div class="k">Input-token budget spent</div>
-      <div class="big"><span id="spent">0</span> <span style="font-size:13px;color:var(--mut)">/ <span id="bud">0</span></span></div>
+      <div class="k">Turn budget used</div>
+      <div class="big"><span id="spent">0</span> <span style="font-size:13px;color:var(--mut)">/ <span id="bud">0</span> turns</span></div>
       <div class="pbar" id="pbar"><i></i></div>
       <span id="progpct" class="sub">0%</span>
     </div>
@@ -130,7 +130,7 @@
     <div class="cell">
       <div class="k">Token usage (pi session)</div>
       <table class="tbl">
-        <tr><td>input (budget)</td><td class="v" id="tkIn">0</td></tr>
+        <tr><td>input</td><td class="v" id="tkIn">0</td></tr>
         <tr><td>output</td><td class="v" id="tkOut">0</td></tr>
         <tr><td>cache read</td><td class="v" id="tkCR">0</td></tr>
         <tr><td>cache write</td><td class="v" id="tkCW">0</td></tr>
@@ -247,10 +247,9 @@ $("tree").addEventListener("click",e=>{
 });
 
 const STOP={
-  budget_spent:["done","DONE — input-token budget spent, answer written"],
+  budget_spent:["done","DONE — turn budget used, answer written"],
   first_turn_done:["done","DONE — first turn complete (force-budget off)"],
   ceiling_seconds:["stop","STOPPED — wall-clock ceiling"],
-  ceiling_turns:["stop","STOPPED — turn ceiling"],
   error_dataroom_boot:["err","ERROR — dataroom sidecar failed to start"],
   cancelled:["stop","CANCELLED"],
   paused:["stop","PAUSED — preempted to free the slot; auto-resumes when idle, or resume now"],
@@ -275,9 +274,9 @@ async function tick(){
     $("q").textContent=d.query||"—";
     $("model").textContent=d.model_id||"—";
     $("tools").textContent=d.tools_enabled||"—";
-    $("bmetric").textContent=d.budget_metric||"input";
+    $("bmetric").textContent=d.token_metric||"input";
 
-    // budget (the input-token spend the whole thing is built around)
+    // budget is now in TURNS (spent = turns done, target = turn budget)
     const b=d.budget||{};
     $("spent").textContent=(b.spent||0).toLocaleString();
     $("bud").textContent=(b.target||0).toLocaleString();

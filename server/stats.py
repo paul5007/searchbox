@@ -276,7 +276,8 @@ def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
     tree["name"] = "output"
     log = parse_pi_log(job_dir / "pi.log")
     usage = session_usage(job_dir)
-    spent = usage.get(BUDGET_METRIC, 0)
+    tokens_spent = usage.get(BUDGET_METRIC, 0)
+    turns_done = log.get("turns", 0)         # the BUDGET is now measured in turns
     ctx_window = int(os.environ.get("CONTEXT_WINDOW", os.environ.get("CTX_SIZE", "131072")))
 
     stop_reason, done = None, False
@@ -288,11 +289,13 @@ def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
             stop_reason = meta.get("stop_reason")
             done = bool(meta.get("done"))
             bdg = bdg or meta.get("budget")
+            if meta.get("turns") is not None:
+                turns_done = meta.get("turns")
             if meta.get("tokens"):
-                usage = meta["tokens"]; spent = usage.get(BUDGET_METRIC, spent)
+                usage = meta["tokens"]; tokens_spent = usage.get(BUDGET_METRIC, tokens_spent)
         except Exception:
             pass
-    bdg = bdg or int(os.environ.get("INPUT_TOKEN_BUDGET", "500000"))
+    bdg = bdg or int(os.environ.get("TURN_BUDGET", "30"))
 
     answer = ""
     ap = work / "ANSWER.md"
@@ -301,10 +304,13 @@ def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
 
     return {
         **log,
-        "budget_metric": BUDGET_METRIC,
+        # BUDGET is in TURNS now. spent/target/percent are all turn-based; token spend is reported
+        # separately under tokens_spent (informational, recorded per-turn but not the stop cond).
+        "token_metric": BUDGET_METRIC,
         "tokens": usage,
-        "budget": {"target": bdg, "spent": spent,
-                   "percent": round(min(100, 100 * spent / bdg), 1) if bdg else 0},
+        "tokens_spent": tokens_spent,
+        "budget": {"target": bdg, "spent": turns_done, "unit": "turns",
+                   "percent": round(min(100, 100 * turns_done / bdg), 1) if bdg else 0},
         "context_window": ctx_window,
         "context_tokens": usage.get("context_tokens", 0),
         "context_percent": round(min(100, 100 * usage.get("context_tokens", 0) / ctx_window), 1) if ctx_window else 0,

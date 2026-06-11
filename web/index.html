@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Searchbox: budget-bounded closed-dataroom QA</title>
-<meta name="description" content="Give a prompt, a zip, and an input-token budget. A self-hosted model in a Pi harness explores the dataroom with local jina retrieval until the budget is spent, then answers fully cited." />
+<meta name="description" content="Give a prompt, a zip, and a turn budget. A self-hosted model in a Pi harness explores the dataroom with local jina retrieval for that many turns, then answers fully cited." />
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <meta name="theme-color" content="#000000" />
 <style>
@@ -81,7 +81,8 @@
         <span>Force budget</span>
       </label>
       <div id="budgetwrap">
-        <input type="number" id="budget" value="100000" min="10000" step="10000" />
+        <input type="number" id="budget" value="30" min="1" step="1" title="budget in turns (agent cycles)" />
+        <span style="color:var(--mut);font-size:12px">turns</span>
       </div>
       <button class="btn" type="submit" id="go">Run</button>
     </div>
@@ -117,7 +118,7 @@ $("force").addEventListener("change",()=>{
 $("f").addEventListener("submit",async e=>{
   e.preventDefault();
   const prompt=$("prompt").value.trim(), file=$("dataroom").files[0];
-  const force=$("force").checked, budget=parseInt($("budget").value,10)||100000;
+  const force=$("force").checked, budget=parseInt($("budget").value,10)||30;
   const tools=[...document.querySelectorAll(".tool:checked")].map(c=>c.value).join(",");
   if(prompt.length<5){$("msg").textContent="prompt too short";return;}
   $("go").disabled=true;$("msg").textContent="queuing…";
@@ -163,11 +164,11 @@ async function loadJobs(){
     const r=await fetch("/jobs",{cache:"no-store"});const d=await r.json();
     const rows=(d.jobs||[]);
     $("jobs").innerHTML=rows.length?rows.map(j=>{
-      const pct=j.percent!=null?` · ${j.percent}%`:"";
+      const prog=(j.budget?` · ${j.spent||0}/${j.budget} turns`:(j.percent!=null?` · ${j.percent}%`:""));
       return `<div class="job" onclick="location.href='/jobs/${j.job_id}/dashboard'">`+
         `<span class="st">${dot(j.status)}</span>`+
         `<span class="q" title="${esc(j.query)}">${esc(j.query)||"(no prompt)"}</span>`+
-        `<span class="pg">${esc(statusLabel(j))}${pct}</span>`+
+        `<span class="pg">${esc(statusLabel(j))}${prog}</span>`+
         `<span class="acts">${acts(j)}</span></div>`;
     }).join(""):'<div class="msg">none yet</div>';
   }catch(e){}
