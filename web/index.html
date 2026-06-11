@@ -135,12 +135,21 @@ const A='viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentC
 const ICON={
   md:`<svg ${A}><path d="M8 2.5v7"/><path d="M5 6.8l3 3 3-3"/><path d="M3.5 12.5h9"/></svg>`,
   trace:`<svg ${A}><path d="M3 3.5h10"/><path d="M3 8h10"/><path d="M3 12.5h6"/></svg>`,
+  pause:`<svg ${A}><path d="M5.5 3.5v9"/><path d="M10.5 3.5v9"/></svg>`,
+  resume:`<svg ${A}><path d="M5 3.5l8 4.5-8 4.5z"/></svg>`,
 };
 function dot(s){if(s==="running")return '<span class="dot on blink"></span>';if(s==="done"||s==="stopped"||s==="failed")return '<span class="dot on"></span>';return '<span class="dot"></span>';}
+async function jobAction(id,act){try{await fetch(`/jobs/${id}/${act}`,{method:"POST"});loadJobs();}catch(e){}}
 function acts(j){
   const done=(j.status==="done"||j.status==="stopped");
   const dis=done?"":'aria-disabled="true"';
-  return `<a class="icon" ${dis} title="download ANSWER.md" href="/jobs/${j.job_id}/answer/download" onclick="event.stopPropagation()">${ICON.md}</a>`+
+  const running=(j.status==="running"||j.status==="queued"||j.status==="pausing");
+  const paused=(j.status==="paused");
+  let ctl="";
+  if(running)ctl=`<span class="icon" title="pause (back to queue)" onclick="event.stopPropagation();jobAction('${j.job_id}','pause')">${ICON.pause}</span>`;
+  else if(paused)ctl=`<span class="icon" title="resume" onclick="event.stopPropagation();jobAction('${j.job_id}','resume')">${ICON.resume}</span>`;
+  return ctl+
+         `<a class="icon" ${dis} title="download ANSWER.md" href="/jobs/${j.job_id}/answer/download" onclick="event.stopPropagation()">${ICON.md}</a>`+
          `<a class="icon" ${dis} title="download full LLM trace (HTML, incl. thinking)" href="/jobs/${j.job_id}/trace.html" onclick="event.stopPropagation()">${ICON.trace}</a>`;
 }
 async function loadJobs(){

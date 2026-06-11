@@ -203,6 +203,9 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
            "--no-skills",
            "--append-system-prompt", SYSTEM_TASK,
            "--extension", str(REPO / "pi" / "extensions" / "dataroom-search.ts")]
+    # On resume, continue the prior pi session (same agent_dir) instead of starting fresh.
+    if getattr(args, "resume", False):
+        cmd.append("--continue")
     log = open(job_dir / "pi.log", "a")
     log.write(f"\n\n===== RPC SESSION @ {time.ctime()} =====\n"); log.flush()
     log_path = job_dir / "pi.log"
@@ -326,7 +329,12 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
         u = session_usage(sfile)
         return u.get(BUDGET_METRIC, 0), u
 
-    send({"type": "prompt", "message": TASK_COMMAND.format(query=args.query)})
+    # Fresh run: send the question as the first user message. Resume: the session already has
+    # the full history (pi --continue), so just nudge it to keep going.
+    if getattr(args, "resume", False):
+        send({"type": "prompt", "message": KEEP_GOING})
+    else:
+        send({"type": "prompt", "message": TASK_COMMAND.format(query=args.query)})
 
     ans_path = work_dir / "ANSWER.md"
 
@@ -455,6 +463,8 @@ def main():
     # whatever the model chose to do), no "Continue." nudges.
     ap.add_argument("--force-budget", dest="force_budget", action="store_true", default=True)
     ap.add_argument("--no-force-budget", dest="force_budget", action="store_false")
+    # Resume a previously-paused/preempted run: keep the on-disk dataroom + pi session, continue.
+    ap.add_argument("--resume", action="store_true", default=False)
     ap.add_argument("--max-turns", type=int, default=int(os.environ.get("MAX_TURNS", "500")))
     ap.add_argument("--max-seconds", type=int, default=int(os.environ.get("MAX_SECONDS", "21600")))
     ap.add_argument("--turn-timeout", type=int, default=int(os.environ.get("TURN_TIMEOUT", "1200")))
@@ -473,7 +483,10 @@ def main():
     dataroom_dir = work_dir / "dataroom"
     agent_dir = job_dir / ".pi-agent"
 
-    prepare_dataroom(Path(args.dataroom).resolve(), dataroom_dir)
+    # On resume the dataroom is already unzipped on disk and the pi session is continued; do not
+    # re-extract (it would reset the sandbox). Only prepare on a fresh run.
+    if not (args.resume and dataroom_dir.exists() and any(dataroom_dir.iterdir())):
+        prepare_dataroom(Path(args.dataroom).resolve(), dataroom_dir)
     (job_dir / "query.txt").write_text(args.query)
 
     port = free_port()

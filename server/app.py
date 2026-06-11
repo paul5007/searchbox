@@ -40,9 +40,14 @@ def _catalog_names() -> set:
 app = FastAPI(title="Searchbox")
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
+# Single-slot serial queue (one llama slot). _queue is FIFO of freshly-submitted/resumed job_ids
+# waiting; _current holds the live orchestrator Popen so a new submission can preempt it.
 _queue: list[str] = []
 _cond = threading.Condition(_lock)
 _current = {"job_id": None, "proc": None}
+# Auto-backfill: when no fresh job is queued, keep the slot busy by resuming the oldest paused
+# job. A backfill run is preemptible - a new submission pauses it and takes the slot.
+AUTO_BACKFILL = os.environ.get("AUTO_BACKFILL", "1") != "0"
 
 
 def _save_meta(job_id: str):
@@ -53,21 +58,55 @@ def _save_meta(job_id: str):
 
 
 def _load_meta(job_id: str) -> dict:
-    mp = JOBS / job_id / "meta.json"
+    """Recover job meta from disk. A control flag of pause is authoritative; a run left 'running'
+    by a killed app, or any interrupted/cancelled state, collapses to the single resumable
+    'paused' state (so it joins the backfill pool / can be resumed)."""
+    job_dir = JOBS / job_id
+    mp = job_dir / "meta.json"
+    meta = {}
     if mp.exists():
         try:
-            return json.loads(mp.read_text())
+            meta = json.loads(mp.read_text())
         except Exception:
-            return {}
-    return {}
+            meta = {}
+    ctl = ""
+    try:
+        ctl = (job_dir / "control").read_text(errors="ignore").strip()
+    except Exception:
+        ctl = ""
+    rm = job_dir / "run_meta.json"
+    if rm.exists() and ctl not in ("pause", "cancel"):
+        try:
+            m = json.loads(rm.read_text())
+            # A finished run: done or stopped (terminal). Not resumable.
+            if meta.get("status") not in ("paused", "pausing"):
+                meta["status"] = "done" if m.get("done") else "stopped"
+                meta["stop_reason"] = m.get("stop_reason")
+        except Exception:
+            pass
+    if ctl in ("pause", "cancel"):
+        meta["status"] = "paused"
+    elif meta.get("status") in ("running", "pausing", "interrupted", "cancelled"):
+        # mid-flight when the app died, or legacy terminal-stop -> resumable paused
+        meta["status"] = "paused"
+    return meta
 
 
-def _run_one(job_id: str):
+def _run_one(job_id: str, resume: bool = False):
     job_dir = JOBS / job_id
+    # Commit to running under the lock. If a pause raced in during the dequeue window, honor it.
     with _lock:
         meta = dict(_jobs.get(job_id, {}))
+        if meta.get("status") == "paused":
+            _save_meta(job_id)
+            return
         _jobs[job_id]["status"] = "running"
         _jobs[job_id]["started"] = time.time()
+        _jobs[job_id]["finished"] = None
+        try:
+            (job_dir / "control").unlink()
+        except FileNotFoundError:
+            pass
     _save_meta(job_id)
     cmd = [sys.executable, "-m", "server.run_searchbox",
            "--query", meta["query"], "--dataroom", str(job_dir / "input.zip"),
@@ -75,6 +114,13 @@ def _run_one(job_id: str):
     # force_budget defaults ON; only add the off flag when explicitly disabled.
     if meta.get("force_budget") is False:
         cmd.append("--no-force-budget")
+    # Resume (continue prior pi session + on-disk dataroom) whenever a previous run exists for this
+    # job - i.e. it was paused/preempted before. True for backfill AND for an explicit foreground
+    # resume. Detected by an existing pi session dir, not just the backfill flag.
+    sess_dir = job_dir / ".pi-agent" / "sessions"
+    has_prior = resume or (sess_dir.exists() and any(sess_dir.rglob("*.jsonl")))
+    if has_prior:
+        cmd.append("--resume")
     env = dict(os.environ)
     for k in ("LLAMA_URL", "MODEL_ID", "CONTEXT_WINDOW",
               "EMBED_MODEL", "RERANK_MODEL", "BUDGET_METRIC",
@@ -91,65 +137,134 @@ def _run_one(job_id: str):
     with _lock:
         _current["job_id"], _current["proc"] = job_id, proc
     rc = proc.wait()
+    # The control flag (if we wrote one) is authoritative over zip/meta for paused state.
+    ctl = ""
+    try:
+        ctl = (job_dir / "control").read_text(errors="ignore").strip()
+    except Exception:
+        pass
     with _lock:
         _current["job_id"], _current["proc"] = None, None
-        meta2 = {}
-        rm = job_dir / "run_meta.json"
-        if rm.exists():
-            try:
-                meta2 = json.loads(rm.read_text())
-            except Exception:
-                pass
-        _jobs[job_id]["status"] = "done" if meta2.get("done") else ("stopped" if rm.exists() else "failed")
-        _jobs[job_id]["stop_reason"] = meta2.get("stop_reason")
+        if ctl in ("pause", "cancel"):
+            _jobs[job_id]["status"], _jobs[job_id]["stop_reason"] = "paused", "paused"
+        else:
+            meta2 = {}
+            rm = job_dir / "run_meta.json"
+            if rm.exists():
+                try:
+                    meta2 = json.loads(rm.read_text())
+                except Exception:
+                    pass
+            _jobs[job_id]["status"] = "done" if meta2.get("done") else ("stopped" if rm.exists() else "failed")
+            _jobs[job_id]["stop_reason"] = meta2.get("stop_reason")
         _jobs[job_id]["rc"] = rc
         _jobs[job_id]["finished"] = time.time()
+        _jobs[job_id]["auto"] = False
     _save_meta(job_id)
+
+
+def _next_foreground_locked():
+    """Oldest 'queued' (freshly submitted or explicitly resumed) job, FIFO, or None. Holds _cond."""
+    for j in _queue:
+        if _jobs.get(j, {}).get("status") == "queued":
+            return j
+    return None
+
+
+def _paused_on_disk() -> list:
+    """Paused job_ids, least-recently-active first - the backfill pool."""
+    out = []
+    if JOBS.exists():
+        for p in sorted(JOBS.iterdir()):
+            if not p.is_dir():
+                continue
+            m = _load_meta(p.name)
+            if m.get("status") == "paused":
+                out.append((p.name, m.get("finished") or 0))
+    out.sort(key=lambda t: t[1])
+    return [jid for jid, _ in out]
+
+
+def _select_next():
+    """Pick next job: (job_id, is_backfill). Tier 1 (foreground 'queued') wins. Tier 2 (backfill)
+    only when AUTO_BACKFILL and no foreground work: oldest paused job, resumed from disk."""
+    with _cond:
+        fg = _next_foreground_locked()
+        if fg is not None:
+            _queue.remove(fg)
+            return fg, False
+    if not AUTO_BACKFILL:
+        return None, False
+    for cand in _paused_on_disk():
+        with _cond:
+            if _next_foreground_locked() is not None:
+                return None, False
+            if _jobs.get(cand, {}).get("status") in ("queued", "running", "pausing"):
+                continue
+            m = _load_meta(cand)
+            if m.get("status") != "paused":
+                continue
+            m.update({"status": "queued", "auto": True, "stop_reason": None,
+                      "started": None, "finished": None})
+            _jobs[cand] = m
+            _save_meta(cand)
+            return cand, True
+    return None, False
+
+
+def _preempt_running_locked():
+    """Flag the currently running job to pause so the slot frees for fresh foreground work; it
+    returns to the paused pool and can resume later. Caller holds _cond; returns proc to SIGTERM
+    OUTSIDE the lock. Preempts BOTH backfill and foreground runs (newest submission wins the slot)."""
+    jid = _current["job_id"]
+    if jid and _jobs.get(jid, {}).get("status") == "running":
+        try:
+            (JOBS / jid / "control").write_text("pause")
+        except Exception:
+            return None
+        _jobs[jid]["status"] = "pausing"
+        _save_meta(jid)
+        return _current["proc"]
+    return None
 
 
 def _worker():
     while True:
-        with _cond:
-            while not _queue:
-                _cond.wait()
-            job_id = _queue.pop(0)
+        job_id, backfill = _select_next()
+        if job_id is None:
+            with _cond:
+                if _next_foreground_locked() is None:
+                    _cond.wait()
+            continue
         try:
-            _run_one(job_id)
+            _run_one(job_id, resume=backfill)
         except Exception as e:
             with _lock:
                 _jobs.setdefault(job_id, {})["status"] = "failed"
                 _jobs[job_id]["error"] = str(e)[:300]
             _save_meta(job_id)
+        with _cond:
+            _cond.notify_all()
 
 
 def _reconcile_on_startup():
-    """A fresh app process owns no running jobs. Any job left marked running/queued/pausing by a
-    previous (killed) process is stale: if it finished it has run_meta (trust that), otherwise it
-    was interrupted. Prevents zombie 'running' rows after an app restart/crash."""
+    """A fresh app process owns no running jobs. Load all jobs from disk; _load_meta collapses any
+    mid-flight (running/pausing/interrupted) job into the resumable 'paused' state. Those join the
+    backfill pool and resume automatically when the slot idles - nothing is lost on restart."""
     if not JOBS.exists():
         return
-    for p in JOBS.iterdir():
+    for p in sorted(JOBS.iterdir()):
         if not p.is_dir():
             continue
         meta = _load_meta(p.name)
-        if meta.get("status") not in ("running", "queued", "pausing"):
-            continue
-        rm = p / "run_meta.json"
-        if rm.exists():
+        if meta:
+            _jobs[p.name] = meta
             try:
-                m = json.loads(rm.read_text())
-                meta["status"] = "done" if m.get("done") else "stopped"
-                meta["stop_reason"] = m.get("stop_reason")
+                (p / "meta.json").write_text(json.dumps(meta))
             except Exception:
-                meta["status"] = "interrupted"
-        else:
-            meta["status"] = "interrupted"
-        meta["finished"] = meta.get("finished") or time.time()
-        _jobs[p.name] = meta
-        try:
-            (p / "meta.json").write_text(json.dumps(meta))
-        except Exception:
-            pass
+                pass
+    with _cond:
+        _cond.notify_all()
 
 
 _reconcile_on_startup()
@@ -204,8 +319,73 @@ async def create(prompt: str = Form(...), budget: int = Form(...),
                          "dataroom_name": dataroom_name, "dataroom_bytes": len(data),
                          "submitted": time.time()}
         _queue.append(job_id)
+        proc = _preempt_running_locked()   # a fresh submission takes the slot from any running job
         _cond.notify_all()
     _save_meta(job_id)
+    # SIGTERM the preempted orchestrator OUTSIDE the lock (a long agent cycle would else block).
+    if proc is not None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            pass
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.post("/jobs/{job_id}/pause")
+def pause(job_id: str):
+    """Pause an unfinished job (write its control flag; SIGTERM if it is the running one). It
+    returns to the paused pool and resumes later via backfill or explicit resume."""
+    job_dir = JOBS / job_id
+    if not job_dir.exists():
+        raise HTTPException(404, "no such job")
+    with _cond:
+        meta = dict(_jobs.get(job_id, {})) or _load_meta(job_id)
+        if meta.get("status") in ("done", "stopped"):
+            return {"job_id": job_id, "status": meta.get("status")}
+        try:
+            (job_dir / "control").write_text("pause")
+        except Exception:
+            pass
+        proc = _current["proc"] if _current["job_id"] == job_id else None
+        _jobs.setdefault(job_id, meta)["status"] = "pausing" if proc else "paused"
+        if job_id in _queue:
+            _queue.remove(job_id)
+        _save_meta(job_id)
+        _cond.notify_all()
+    if proc is not None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            pass
+    return {"job_id": job_id, "status": "pausing" if proc else "paused"}
+
+
+@app.post("/jobs/{job_id}/resume")
+def resume(job_id: str):
+    """Re-enqueue a paused job as foreground work (preempts any running backfill/foreground job)."""
+    job_dir = JOBS / job_id
+    if not job_dir.exists():
+        raise HTTPException(404, "no such job")
+    with _cond:
+        meta = _load_meta(job_id)
+        if meta.get("status") in ("done", "stopped"):
+            return {"job_id": job_id, "status": meta.get("status")}
+        try:
+            (job_dir / "control").unlink()
+        except FileNotFoundError:
+            pass
+        meta.update({"status": "queued", "auto": False, "stop_reason": None})
+        _jobs[job_id] = meta
+        if job_id not in _queue:
+            _queue.append(job_id)
+        proc = _preempt_running_locked()
+        _save_meta(job_id)
+        _cond.notify_all()
+    if proc is not None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except Exception:
+            pass
     return {"job_id": job_id, "status": "queued"}
 
 
