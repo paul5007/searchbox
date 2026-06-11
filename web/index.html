@@ -38,7 +38,11 @@
   .job:hover{background:var(--fill)}
   .job .st{flex:none;width:14px}
   .job .q{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .job .pg{color:var(--mut);flex:none;width:140px;text-align:right;font-size:12px}
+  .job .pg{color:var(--mut);flex:none;width:140px;font-size:12px;text-align:right}
+  .job .pg .lab{display:block;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .job .pbar{height:6px;border:1px solid var(--line);position:relative;overflow:hidden}
+  .job .pbar > i{position:absolute;left:0;top:0;bottom:0;background:var(--mut);width:0%}
+  .job .pbar.over > i{background:repeating-linear-gradient(45deg,var(--mut) 0 4px,transparent 4px 8px)}
   .job .acts{flex:none;display:flex;gap:5px}
   .dot{display:inline-block;width:7px;height:7px;border:1px solid var(--line)}
   .dot.on{background:var(--fg)}
@@ -164,11 +168,14 @@ async function loadJobs(){
     const r=await fetch("/jobs",{cache:"no-store"});const d=await r.json();
     const rows=(d.jobs||[]);
     $("jobs").innerHTML=rows.length?rows.map(j=>{
-      const prog=(j.budget?` · ${j.spent||0}/${j.budget} turns`:(j.percent!=null?` · ${j.percent}%`:""));
+      const pct=Math.max(0,Math.min(100,j.percent||0));
+      const over=(j.budget&&(j.spent||0)>j.budget)?" over":"";
+      const lab=`${esc(statusLabel(j))}${j.budget?` · ${j.spent||0}/${j.budget}`:""}`;
+      const prog=`<span class="lab">${lab}</span><span class="pbar${over}" title="${pct}%"><i style="width:${pct}%"></i></span>`;
       return `<div class="job" onclick="location.href='/jobs/${j.job_id}/dashboard'">`+
         `<span class="st">${dot(j.status)}</span>`+
         `<span class="q" title="${esc(j.query)}">${esc(j.query)||"(no prompt)"}</span>`+
-        `<span class="pg">${esc(statusLabel(j))}${prog}</span>`+
+        `<span class="pg">${prog}</span>`+
         `<span class="acts">${acts(j)}</span></div>`;
     }).join(""):'<div class="msg">none yet</div>';
   }catch(e){}

@@ -40,7 +40,7 @@
   .sub{color:var(--mut);font-size:11px;margin-top:2px}
   .pbar{height:18px;border:1px solid var(--line);position:relative;margin-top:10px;overflow:hidden}
   .pbar > i{position:absolute;left:0;top:0;bottom:0;background:var(--fill);width:0%}
-  .pbar.over > i{background:repeating-linear-gradient(45deg,var(--fill) 0 5px,transparent 5px 10px)}
+  .pbar.over > i,.bar.over > i{background:repeating-linear-gradient(45deg,var(--fill) 0 5px,transparent 5px 10px)}
   .now .nowline{font-size:13px;overflow-wrap:anywhere;min-height:1.45em}
   .now .nowline .t{color:var(--mut);margin-right:8px}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
@@ -50,7 +50,7 @@
   .cell.errcell.has{display:block;grid-column:1/-1;border-left:4px solid var(--line)}
   .bar{height:14px;border:1px solid var(--line);position:relative;margin-top:10px;overflow:hidden}
   .bar > i{position:absolute;left:0;top:0;bottom:0;background:var(--fill);width:0%}
-  .bar.warn > i{background:repeating-linear-gradient(45deg,var(--fill) 0 4px,transparent 4px 8px)}
+  .bar.warn > i,.pbar.warn > i{background:repeating-linear-gradient(45deg,var(--fill) 0 4px,transparent 4px 8px)}
   .dist{margin-top:4px}
   .row{display:flex;align-items:center;gap:8px;margin:3px 0}
   .row .name{width:140px;max-width:45%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -111,10 +111,10 @@
 
   <div class="hero">
     <div class="prog">
-      <div class="k">Turn budget used</div>
-      <div class="big"><span id="spent">0</span> <span style="font-size:13px;color:var(--mut)">/ <span id="bud">0</span> turns</span></div>
-      <div class="pbar" id="pbar"><i></i></div>
-      <span id="progpct" class="sub">0%</span>
+      <div class="k">Context window</div>
+      <div class="big"><span id="ctxpct">0</span>%</div>
+      <div class="sub"><span id="ctxtok">0</span> / <span id="ctxwin">0</span> &nbsp;·&nbsp; <span id="cmp">0</span> compactions</div>
+      <div class="pbar" id="ctxbar"><i></i></div>
     </div>
     <div class="now">
       <div class="k">Now</div>
@@ -138,11 +138,10 @@
       </table>
     </div>
     <div class="cell">
-      <div class="k">Context window</div>
-      <div class="big"><span id="ctxpct">0</span>%</div>
-      <div class="sub"><span id="ctxtok">0</span> / <span id="ctxwin">0</span></div>
-      <div class="sub"><span id="cmp">0</span> compactions</div>
-      <div class="bar" id="ctxbar"><i></i></div>
+      <div class="k">Turn budget used</div>
+      <div class="big"><span id="spent">0</span> <span style="font-size:13px;color:var(--mut)">/ <span id="bud">0</span> turns</span></div>
+      <div class="bar" id="pbar"><i></i></div>
+      <span id="progpct" class="sub">0%</span>
     </div>
     <div class="cell">
       <div class="k">Tool calls</div>
@@ -200,6 +199,13 @@ let lastOk=0;
 function human(b){if(b<1024)return b+" B";const u=["KB","MB","GB"];let i=-1;do{b/=1024;i++}while(b>=1024&&i<2);return b.toFixed(b<10?1:0)+" "+u[i];}
 function dur(ms){ms=ms||0;const s=ms/1000;if(s<60)return s.toFixed(s<10?1:0)+"s";const m=Math.floor(s/60),r=Math.round(s%60);return m+"m"+(r?" "+r+"s":"");}
 function esc(s){return String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+function toolCount(t){
+  // tools_enabled is the SEARCHBOX_TOOLS env: a comma list, "all" (unset->defaults), or "" (none).
+  if(t==null||t==="—")return "—";
+  if(t==="all")return "all";
+  const n=String(t).split(",").map(s=>s.trim()).filter(Boolean).length;
+  return n+(n===1?" tool":" tools");
+}
 // Directories the user has collapsed (by tree path). dataroom is collapsed by default so the
 // big dataroom/ listing does not dominate the panel; click it to expand.
 const collapsed=new Set(["dataroom"]);
@@ -273,7 +279,7 @@ async function tick(){
     const live=d.job_status==="running";
     $("q").textContent=d.query||"—";
     $("model").textContent=d.model_id||"—";
-    $("tools").textContent=d.tools_enabled||"—";
+    $("tools").textContent=toolCount(d.tools_enabled);
     $("bmetric").textContent=d.token_metric||"input";
 
     // budget is now in TURNS (spent = turns done, target = turn budget)
