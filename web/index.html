@@ -81,7 +81,7 @@
         <span>Force budget</span>
       </label>
       <div id="budgetwrap">
-        <input type="number" id="budget" value="100000" min="10000" step="10000" />
+        <input type="number" id="budget" value="10000000" min="10000" step="10000" />
       </div>
       <button class="btn" type="submit" id="go">Run</button>
     </div>
@@ -102,7 +102,7 @@ const escn=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;"
     const r=await fetch("/tools",{cache:"no-store"});const d=await r.json();
     const tools=d.tools||[];
     $("tools").innerHTML=tools.map(t=>
-      `<label class="toggle" title="${escn(t.desc)}"><input type="checkbox" class="tool" value="${escn(t.name)}"${t.default?" checked":""} /><span>${escn(t.name)}</span></label>`
+      `<label class="toggle" title="${escn(t.desc)}"><input type="checkbox" class="tool" value="${escn(t.name)}" checked /><span>${escn(t.name)}</span></label>`
     ).join("");
     $("toolcount").textContent=`(${tools.length} available, all embedding/rerank based)`;
   }catch(e){$("tools").innerHTML='<span class="msg">could not load tools</span>';}
@@ -117,7 +117,7 @@ $("force").addEventListener("change",()=>{
 $("f").addEventListener("submit",async e=>{
   e.preventDefault();
   const prompt=$("prompt").value.trim(), file=$("dataroom").files[0];
-  const force=$("force").checked, budget=parseInt($("budget").value,10)||100000;
+  const force=$("force").checked, budget=parseInt($("budget").value,10)||10000000;
   const tools=[...document.querySelectorAll(".tool:checked")].map(c=>c.value).join(",");
   if(prompt.length<5){$("msg").textContent="prompt too short";return;}
   $("go").disabled=true;$("msg").textContent="queuing…";
