@@ -390,6 +390,110 @@ async def rerank(req: Request):
     return {"results": out}
 
 
+# --- derived compute endpoints (all reduce to _encode / rerank; numpy on the server) ---------
+# These back the many tool "shapes" the agent can pick from. Every one is just embedding or
+# reranking under the hood - different I/O ergonomics, same two models.
+
+def _embed_norm(texts, role: str) -> np.ndarray:
+    e = _encode(list(texts), role=role)
+    e = np.asarray(e, dtype=np.float32)
+    n = np.linalg.norm(e, axis=1, keepdims=True)
+    n[n == 0] = 1.0
+    return e / n
+
+
+@app.post("/similarity")
+async def similarity(req: Request):
+    """Cosine similarity. Either pairwise (a,b same length) or matrix (queries x documents)."""
+    body = await req.json()
+    a = body.get("a") or body.get("queries") or []
+    b = body.get("b") or body.get("documents") or []
+    if not a or not b:
+        return {"error": "need two non-empty text lists"}
+    mode = body.get("mode") or ("pairwise" if len(a) == len(b) and not body.get("matrix") else "matrix")
+    qa = _embed_norm(a, role="query")
+    db = _embed_norm(b, role="passage")
+    if mode == "pairwise" and len(a) == len(b):
+        sims = [round(float(np.dot(qa[i], db[i])), 4) for i in range(len(a))]
+        return {"mode": "pairwise", "similarities": sims}
+    mat = np.round(qa @ db.T, 4).tolist()
+    return {"mode": "matrix", "matrix": mat}
+
+
+@app.post("/classify")
+async def classify(req: Request):
+    """Zero-shot classification via embeddings: assign each text its nearest label."""
+    body = await req.json()
+    texts = body.get("texts") or []
+    labels = body.get("labels") or []
+    if not texts or not labels:
+        return {"error": "need texts and labels"}
+    te = _embed_norm(texts, role="query")
+    le = _embed_norm(labels, role="passage")
+    sims = te @ le.T
+    out = []
+    for i, t in enumerate(texts):
+        j = int(np.argmax(sims[i]))
+        out.append({"text": t, "label": labels[j], "score": round(float(sims[i][j]), 4)})
+    return {"results": out}
+
+
+def _greedy_diverse(embs: np.ndarray, k: int) -> list:
+    """Facility-location-style greedy: pick k items maximizing min-distance to chosen set."""
+    n = embs.shape[0]
+    k = max(1, min(k, n))
+    chosen = [0]
+    sims = embs @ embs.T
+    while len(chosen) < k:
+        # for each candidate, its max similarity to any chosen (lower = more diverse)
+        maxsim = sims[:, chosen].max(axis=1)
+        for c in chosen:
+            maxsim[c] = 2.0
+        chosen.append(int(np.argmin(maxsim)))
+    return chosen
+
+
+@app.post("/deduplicate")
+async def deduplicate(req: Request):
+    """Top-k semantically diverse subset of strings (submodular/greedy over embeddings)."""
+    body = await req.json()
+    strings = body.get("strings") or body.get("texts") or []
+    if not strings:
+        return {"error": "need strings"}
+    k = int(body.get("k") or max(1, len(strings) // 2))
+    embs = _embed_norm(strings, role="passage")
+    idx = _greedy_diverse(embs, k)
+    return {"kept_indices": idx, "kept": [strings[i] for i in idx]}
+
+
+@app.post("/cluster")
+async def cluster(req: Request):
+    """Greedy threshold clustering over embeddings (no sklearn): group near-duplicate texts."""
+    body = await req.json()
+    texts = body.get("texts") or []
+    if not texts:
+        return {"error": "need texts"}
+    thr = float(body.get("threshold", 0.82))
+    embs = _embed_norm(texts, role="passage")
+    sims = embs @ embs.T
+    assigned = [-1] * len(texts)
+    clusters = []
+    for i in range(len(texts)):
+        if assigned[i] != -1:
+            continue
+        cid = len(clusters)
+        members = [i]
+        assigned[i] = cid
+        for j in range(i + 1, len(texts)):
+            if assigned[j] == -1 and sims[i][j] >= thr:
+                assigned[j] = cid
+                members.append(j)
+        clusters.append(members)
+    return {"n_clusters": len(clusters),
+            "clusters": [{"id": c, "members": m, "texts": [texts[x] for x in m]}
+                        for c, m in enumerate(clusters)]}
+
+
 @app.post("/stats")
 async def stats(_: Request):
     """List the dataroom files. Does NOT embed anything - there is no boot index."""

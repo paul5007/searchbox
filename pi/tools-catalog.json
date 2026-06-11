@@ -1,0 +1,115 @@
+{
+  "_comment": "Single source of truth for the external dataroom tools. Every tool is a thin wrapper over the embedding (jina-embeddings-v5-text-small) or reranking (jina-reranker-v3) backend in server/dataroom_service.py - same two models, different interface shapes/names/docstrings. The extension (pi/extensions/dataroom-search.ts) registers each; server/app.py validates the UI selection against this list and serves it to the homepage. param types: s=string, s[]=string[], i?=optional int, n?=optional number, f?=optional float. 'op' is the backend endpoint. 'fixed' merges constant body fields. 'rename' maps an arg name to a different body key.",
+  "tools": [
+    {
+      "name": "sentence_embed", "op": "embed", "default": true,
+      "desc": "Embed text string(s) with jina-embeddings-v5-text-small and APPEND the vectors to a jsonl file in your working directory. Returns only {path,count,dim} - NOT the vectors (read them back from the file yourself). You decide what to embed and how to use the vectors. L2-normalized (dot == cosine). INPUT: {texts: string[], role?: \"query\"|\"passage\" (default passage), out?: filename (default embeddings.jsonl)}. FILE: one json/line {i,text,role,dim,embedding}.",
+      "params": {"texts": "s[]", "role": "s?", "out": "s?"}
+    },
+    {
+      "name": "embed_query", "op": "embed", "fixed": {"role": "query"},
+      "desc": "Embed a single query string (query role) with jina-embeddings-v5-text-small, appending the vector to a jsonl file. Returns {path,count,dim}. Convenience form of sentence_embed for the question side.",
+      "params": {"query": "s", "out": "s?"}, "rename": {"query": "texts_one"}
+    },
+    {
+      "name": "embed_passages", "op": "embed", "fixed": {"role": "passage"},
+      "desc": "Embed one or more passages (passage role) with jina-embeddings-v5-text-small, appending vectors to a jsonl file. Returns {path,count,dim}. Convenience form of sentence_embed for the document side.",
+      "params": {"passages": "s[]", "out": "s?"}, "rename": {"passages": "texts"}
+    },
+    {
+      "name": "semantic_search", "op": "search",
+      "desc": "Find passages in the dataroom by meaning (embedding similarity), embedding on the fly over the chosen scope. INPUT: {query, k?, paths?, chunk_size?}. Returns top-k chunks as {path,chunk,score,text}.",
+      "params": {"query": "s", "k": "i?", "paths": "s[]?", "chunk_size": "i?"}
+    },
+    {
+      "name": "vector_search", "op": "search",
+      "desc": "Dense retrieval over the dataroom: embeds your query and the corpus, returns the k nearest chunks by cosine similarity. INPUT: {query, k?, paths?}. Returns {path,chunk,score,text}.",
+      "params": {"query": "s", "k": "i?", "paths": "s[]?"}
+    },
+    {
+      "name": "find_in_dataroom", "op": "search",
+      "desc": "Look something up in the dataroom by meaning rather than exact keywords. INPUT: {query, k?}. Returns the most relevant chunks with their source file and a relevance score.",
+      "params": {"query": "s", "k": "i?"}
+    },
+    {
+      "name": "retrieve_context", "op": "search",
+      "desc": "Retrieve the top supporting passages for a question from the dataroom (RAG-style retrieval). INPUT: {question, k?}. Returns ranked chunks {path,chunk,score,text}.",
+      "params": {"question": "s", "k": "i?"}, "rename": {"question": "query"}
+    },
+    {
+      "name": "lookup_evidence", "op": "search",
+      "desc": "Find evidence in the dataroom that supports or refutes a claim, by semantic match. INPUT: {claim, k?}. Returns relevant passages with sources and scores.",
+      "params": {"claim": "s", "k": "i?"}, "rename": {"claim": "query"}
+    },
+    {
+      "name": "passage_rerank", "op": "rerank", "default": true,
+      "desc": "Score caller-supplied passages by relevance to a query with jina-reranker-v3 (cross-encoder). You supply the candidates. INPUT: {query, documents: string[], top_n?}. OUTPUT: {results:[{index,score,text}]} sorted by score desc.",
+      "params": {"query": "s", "documents": "s[]", "top_n": "i?"}
+    },
+    {
+      "name": "sort_by_relevance", "op": "rerank",
+      "desc": "Rerank a list of documents by how well each matches a query, using the Jina reranker. INPUT: {query, documents: string[], top_n?}. Returns documents sorted by relevance with scores.",
+      "params": {"query": "s", "documents": "s[]", "top_n": "i?"}
+    },
+    {
+      "name": "rank_documents", "op": "rerank",
+      "desc": "Order a set of documents from most to least relevant to a topic (cross-encoder reranking). INPUT: {topic, documents: string[]}. Returns ranked {index,score,text}.",
+      "params": {"topic": "s", "documents": "s[]"}, "rename": {"topic": "query"}
+    },
+    {
+      "name": "pick_best_passage", "op": "rerank", "fixed": {"top_n": 1},
+      "desc": "Return the single passage most relevant to a query (reranker, top-1). INPUT: {query, documents: string[]}. Returns the best {index,score,text}.",
+      "params": {"query": "s", "documents": "s[]"}
+    },
+    {
+      "name": "top3_passages", "op": "rerank", "fixed": {"top_n": 3},
+      "desc": "Return the 3 passages most relevant to a query (reranker, top-3). INPUT: {query, documents: string[]}. Returns the best three {index,score,text}.",
+      "params": {"query": "s", "documents": "s[]"}
+    },
+    {
+      "name": "cosine_similarity", "op": "similarity", "fixed": {"mode": "pairwise"},
+      "desc": "Compute pairwise cosine similarity between two equal-length lists of texts (embedding dot product, normalized). INPUT: {a: string[], b: string[]}. Returns {similarities: number[]}.",
+      "params": {"a": "s[]", "b": "s[]"}
+    },
+    {
+      "name": "similarity_matrix", "op": "similarity", "fixed": {"mode": "matrix"},
+      "desc": "Compute the full cosine-similarity matrix between queries and documents via embeddings. INPUT: {queries: string[], documents: string[]}. Returns {matrix: number[][]} (queries x documents).",
+      "params": {"queries": "s[]", "documents": "s[]"}
+    },
+    {
+      "name": "nearest_texts", "op": "similarity", "fixed": {"mode": "matrix"},
+      "desc": "Given one query and many candidate texts, score each candidate by embedding cosine similarity to the query. INPUT: {query, candidates: string[]}. Returns a similarity matrix (1 x N) you can argsort.",
+      "params": {"query": "s", "candidates": "s[]"}, "rename": {"query": "queries_one", "candidates": "documents"}
+    },
+    {
+      "name": "classify_text", "op": "classify",
+      "desc": "Zero-shot classify texts into user-defined labels using embeddings (each text -> nearest label). INPUT: {texts: string[], labels: string[]}. Returns {results:[{text,label,score}]}.",
+      "params": {"texts": "s[]", "labels": "s[]"}
+    },
+    {
+      "name": "zero_shot_label", "op": "classify",
+      "desc": "Assign the best-matching label to a single text from candidate labels, via embedding similarity. INPUT: {text, labels: string[]}. Returns {results:[{text,label,score}]}.",
+      "params": {"text": "s", "labels": "s[]"}, "rename": {"text": "texts_one"}
+    },
+    {
+      "name": "deduplicate_texts", "op": "deduplicate",
+      "desc": "Select the top-k semantically DIVERSE strings (submodular/greedy over embeddings) - i.e. drop near-duplicates, keep a representative spread. INPUT: {strings: string[], k?}. Returns {kept_indices, kept}.",
+      "params": {"strings": "s[]", "k": "i?"}
+    },
+    {
+      "name": "select_diverse", "op": "deduplicate",
+      "desc": "Pick a diverse subset of items that best covers the semantic space (embedding facility-location). INPUT: {items: string[], k?}. Returns {kept_indices, kept}.",
+      "params": {"items": "s[]", "k": "i?"}, "rename": {"items": "strings"}
+    },
+    {
+      "name": "cluster_texts", "op": "cluster",
+      "desc": "Group texts into clusters of near-duplicates/related items by embedding similarity (greedy threshold). INPUT: {texts: string[], threshold?} (default 0.82). Returns {n_clusters, clusters:[{id,members,texts}]}.",
+      "params": {"texts": "s[]", "threshold": "n?"}
+    },
+    {
+      "name": "group_similar", "op": "cluster",
+      "desc": "Cluster a list of items so semantically similar ones are grouped together (embedding similarity). INPUT: {items: string[], threshold?}. Returns clusters of items.",
+      "params": {"items": "s[]", "threshold": "n?"}, "rename": {"items": "texts"}
+    }
+  ]
+}

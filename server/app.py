@@ -23,6 +23,19 @@ HERE = Path(__file__).resolve().parent
 WEB = HERE.parent / "web"
 JOBS = Path(os.environ.get("JOBS_DIR", str(HERE.parent / "data" / "jobs"))).resolve()
 JOBS.mkdir(parents=True, exist_ok=True)
+CATALOG_PATH = HERE.parent / "pi" / "tools-catalog.json"
+
+
+def _catalog() -> list:
+    """The external-tool catalog (single source of truth, pi/tools-catalog.json)."""
+    try:
+        return json.loads(CATALOG_PATH.read_text()).get("tools", [])
+    except Exception:
+        return []
+
+
+def _catalog_names() -> set:
+    return {t.get("name") for t in _catalog() if t.get("name")}
 
 app = FastAPI(title="Searchbox")
 _jobs: dict[str, dict] = {}
@@ -169,7 +182,7 @@ async def create(prompt: str = Form(...), budget: int = Form(...),
     # built-ins only). None/missing => leave unset (extension uses its DEFAULT_TOOLS).
     tools_sel = None
     if tools is not None:
-        allowed = {"sentence_embed", "passage_rerank", "semantic_search"}
+        allowed = _catalog_names()
         picked = [t.strip() for t in tools.split(",") if t.strip() in allowed]
         tools_sel = ",".join(picked)  # may be "" meaning none
     job_id = uuid.uuid4().hex[:12]
@@ -372,6 +385,18 @@ def get_file(job_id: str, path: str):
 @app.get("/jobs/{job_id}/dashboard", response_class=HTMLResponse)
 def dashboard(job_id: str):
     return HTMLResponse((WEB / "dashboard.html").read_text().replace("__JOB_ID__", job_id))
+
+
+@app.get("/tools")
+def tools_catalog():
+    """External tool catalog for the homepage toggle list: name, one-line desc, default flag."""
+    out = []
+    for t in _catalog():
+        desc = str(t.get("desc", ""))
+        short = desc.split(". INPUT")[0].split(". ")[0][:140]
+        out.append({"name": t.get("name"), "op": t.get("op"),
+                    "default": bool(t.get("default")), "desc": short})
+    return {"tools": out}
 
 
 @app.get("/", response_class=HTMLResponse)

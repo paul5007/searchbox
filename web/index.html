@@ -72,12 +72,8 @@
       </div>
     </div>
     <div class="field">
-      <label class="lbl">External tools</label>
-      <div class="tools">
-        <label class="toggle"><input type="checkbox" class="tool" value="sentence_embed" checked /><span>sentence_embed</span></label>
-        <label class="toggle"><input type="checkbox" class="tool" value="passage_rerank" checked /><span>passage_rerank</span></label>
-        <label class="toggle"><input type="checkbox" class="tool" value="semantic_search" /><span>semantic_search</span></label>
-      </div>
+      <label class="lbl">External tools <span id="toolcount" style="text-transform:none;letter-spacing:0;color:var(--mut)"></span></label>
+      <div class="tools" id="tools"></div>
     </div>
     <div class="fieldrow">
       <label class="toggle">
@@ -99,6 +95,18 @@
 </div>
 <script>
 const $=id=>document.getElementById(id);
+const escn=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// Load the external-tool catalog and render the toggle list.
+(async()=>{
+  try{
+    const r=await fetch("/tools",{cache:"no-store"});const d=await r.json();
+    const tools=d.tools||[];
+    $("tools").innerHTML=tools.map(t=>
+      `<label class="toggle" title="${escn(t.desc)}"><input type="checkbox" class="tool" value="${escn(t.name)}"${t.default?" checked":""} /><span>${escn(t.name)}</span></label>`
+    ).join("");
+    $("toolcount").textContent=`(${tools.length} available, all embedding/rerank based)`;
+  }catch(e){$("tools").innerHTML='<span class="msg">could not load tools</span>';}
+})();
 $("dataroom").addEventListener("change",()=>{
   const f=$("dataroom").files[0];
   $("fname").textContent=f?f.name:"";
