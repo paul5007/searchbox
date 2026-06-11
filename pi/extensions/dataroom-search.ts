@@ -21,12 +21,13 @@ import { Type } from "typebox";
 const BASE = process.env.DATAROOM_INDEX_URL || "http://127.0.0.1:8078";
 
 // Ablation gate: which tools this run is allowed to register.
-//   SEARCHBOX_TOOLS unset/empty => the DEFAULT set (see DEFAULT_TOOLS below).
-//   SEARCHBOX_TOOLS="a,b"      => exactly those tools.
+//   SEARCHBOX_TOOLS UNSET (env var absent) => the DEFAULT set (see DEFAULT_TOOLS below).
+//   SEARCHBOX_TOOLS=""   (present but empty) => NO external tools (pi built-ins only).
+//   SEARCHBOX_TOOLS="a,b"                    => exactly those tools.
 const ENABLED = (() => {
-  const raw = (process.env.SEARCHBOX_TOOLS || "").trim();
-  if (!raw) return null; // null => use DEFAULT_TOOLS
-  return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
+  const rawEnv = process.env.SEARCHBOX_TOOLS;
+  if (rawEnv === undefined) return null; // unset => use DEFAULT_TOOLS
+  return new Set(rawEnv.trim().split(",").map((s) => s.trim()).filter(Boolean));
 })();
 // Backward-compatible aliases so older SEARCHBOX_TOOLS values keep working.
 const ALIAS: Record<string, string> = {

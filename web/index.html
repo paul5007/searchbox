@@ -49,6 +49,8 @@
   .msg{margin-top:12px;color:var(--mut);font-size:12px}
   .toggle{display:inline-flex;align-items:center;gap:7px;cursor:pointer;user-select:none;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
   .toggle input{width:14px;height:14px;accent-color:var(--fg);cursor:pointer}
+  .tools{display:flex;flex-wrap:wrap;gap:16px}
+  .tools .toggle{text-transform:none;letter-spacing:0;font-size:12px;color:var(--fg)}
   #budgetwrap.off{opacity:.35;pointer-events:none}
 </style>
 </head>
@@ -67,6 +69,14 @@
         <label class="pick" for="dataroom">Choose file</label>
         <input type="file" id="dataroom" accept=".zip" />
         <span class="fname" id="fname"></span>
+      </div>
+    </div>
+    <div class="field">
+      <label class="lbl">External tools</label>
+      <div class="tools">
+        <label class="toggle"><input type="checkbox" class="tool" value="sentence_embed" checked /><span>sentence_embed</span></label>
+        <label class="toggle"><input type="checkbox" class="tool" value="passage_rerank" checked /><span>passage_rerank</span></label>
+        <label class="toggle"><input type="checkbox" class="tool" value="semantic_search" /><span>semantic_search</span></label>
       </div>
     </div>
     <div class="fieldrow">
@@ -100,9 +110,10 @@ $("f").addEventListener("submit",async e=>{
   e.preventDefault();
   const prompt=$("prompt").value.trim(), file=$("dataroom").files[0];
   const force=$("force").checked, budget=parseInt($("budget").value,10)||100000;
+  const tools=[...document.querySelectorAll(".tool:checked")].map(c=>c.value).join(",");
   if(prompt.length<5){$("msg").textContent="prompt too short";return;}
   $("go").disabled=true;$("msg").textContent="queuing…";
-  const fd=new FormData();fd.append("prompt",prompt);fd.append("budget",budget);fd.append("force_budget",force?"true":"false");
+  const fd=new FormData();fd.append("prompt",prompt);fd.append("budget",budget);fd.append("force_budget",force?"true":"false");fd.append("tools",tools);
   if(file)fd.append("dataroom",file);
   try{
     const r=await fetch("/jobs",{method:"POST",body:fd});

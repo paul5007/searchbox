@@ -63,11 +63,15 @@ def _run_one(job_id: str):
     if meta.get("force_budget") is False:
         cmd.append("--no-force-budget")
     env = dict(os.environ)
-    for k in ("SEARCHBOX_TOOLS", "LLAMA_URL", "MODEL_ID", "CONTEXT_WINDOW",
+    for k in ("LLAMA_URL", "MODEL_ID", "CONTEXT_WINDOW",
               "EMBED_MODEL", "RERANK_MODEL", "BUDGET_METRIC",
               "EMBED_BACKEND", "RERANK_BACKEND", "API_EMBED_MODEL", "API_RERANK_MODEL"):
         if meta.get(k):
             env[k] = str(meta[k])
+    # SEARCHBOX_TOOLS: pass through even when "" (explicit "no external tools"). Only None/missing
+    # means "unset" -> extension falls back to its DEFAULT_TOOLS.
+    if meta.get("SEARCHBOX_TOOLS") is not None:
+        env["SEARCHBOX_TOOLS"] = str(meta["SEARCHBOX_TOOLS"])
     log = open(job_dir / "orchestrator.log", "a")
     proc = subprocess.Popen(cmd, cwd=str(HERE.parent), env=env, stdout=log,
                             stderr=subprocess.STDOUT, start_new_session=True)
@@ -153,12 +157,21 @@ DEFAULT_DATAROOM = Path(os.environ.get(
 @app.post("/jobs")
 async def create(prompt: str = Form(...), budget: int = Form(...),
                  force_budget: bool = Form(True),
+                 tools: str = Form(None),
                  dataroom: UploadFile | None = File(None)):
     prompt = (prompt or "").strip()
     if len(prompt) < 5:
         raise HTTPException(400, "prompt too short")
     if budget < 1:
         raise HTTPException(400, "budget must be >= 1")
+    # `tools` is a comma-separated list of external tools to register for this job (subset of
+    # sentence_embed, passage_rerank, semantic_search). Empty string => no external tools (pi
+    # built-ins only). None/missing => leave unset (extension uses its DEFAULT_TOOLS).
+    tools_sel = None
+    if tools is not None:
+        allowed = {"sentence_embed", "passage_rerank", "semantic_search"}
+        picked = [t.strip() for t in tools.split(",") if t.strip() in allowed]
+        tools_sel = ",".join(picked)  # may be "" meaning none
     job_id = uuid.uuid4().hex[:12]
     job_dir = JOBS / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -174,6 +187,7 @@ async def create(prompt: str = Form(...), budget: int = Form(...),
     with _cond:
         _jobs[job_id] = {"status": "queued", "query": prompt, "budget": budget,
                          "force_budget": bool(force_budget),
+                         "SEARCHBOX_TOOLS": tools_sel,
                          "dataroom_name": dataroom_name, "dataroom_bytes": len(data),
                          "submitted": time.time()}
         _queue.append(job_id)
