@@ -466,7 +466,7 @@ def main():
     ap.add_argument("--dataroom", required=True)
     ap.add_argument("--out", default="./out")
     # --budget is the TURN budget: how many agent cycles to run (force-budget ON).
-    ap.add_argument("--budget", type=int, default=int(os.environ.get("TURN_BUDGET", "30")))
+    ap.add_argument("--budget", type=int, default=int(os.environ.get("TURN_BUDGET", "10")))
     # Force-budget (default ON): budget is a FLOOR - keep nudging "Continue." until the turn
     # budget is used, even if the model already wrote ANSWER.md. When OFF, the run stops right
     # after the model's FIRST turn ends (one natural pass), no "Continue." nudges.

@@ -295,7 +295,7 @@ def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
                 usage = meta["tokens"]; tokens_spent = usage.get(BUDGET_METRIC, tokens_spent)
         except Exception:
             pass
-    bdg = bdg or int(os.environ.get("TURN_BUDGET", "30"))
+    bdg = bdg or int(os.environ.get("TURN_BUDGET", "10"))
 
     answer = ""
     ap = work / "ANSWER.md"

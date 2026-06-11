@@ -12,7 +12,7 @@ set -a; [ -f .env ] && . ./.env; set +a
 
 QUERY="${1:?usage: run.sh <query> <dataroom.zip|folder> [budget] [outdir]}"
 DATAROOM="${2:?usage: run.sh <query> <dataroom.zip|folder> [budget] [outdir]}"
-BUDGET="${3:-${TURN_BUDGET:-30}}"
+BUDGET="${3:-${TURN_BUDGET:-10}}"
 OUT="${4:-./out/$(date +%Y%m%d-%H%M%S)}"
 
 [ -x "$ROOT/.venv/bin/python" ] || { echo "ERROR: .venv missing (see README)" >&2; exit 1; }

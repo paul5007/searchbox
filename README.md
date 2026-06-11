@@ -109,7 +109,7 @@ Everything is an env knob - no code edits:
 | `TURN_BUDGET` | the budget, in turns |
 
 ```bash
-python -m scripts.ablate --query "..." --dataroom ./dataroom.zip --budget 30 \
+python -m scripts.ablate --query "..." --dataroom ./dataroom.zip --budget 10 \
   --matrix config/ablations.example.json --out ./runs/exp1
 cat ./runs/exp1/results.jsonl    # one row per config
 ```

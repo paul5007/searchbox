@@ -21,7 +21,7 @@ Define the matrix in a JSON file (see config/ablations.example.json) or use the 
 default matrix (tool ablation). Example:
 
   python -m scripts.ablate --query "..." --dataroom path/to/dataroom.zip \\
-      --budget 30 --matrix config/ablations.example.json --out runs/exp1
+      --budget 10 --matrix config/ablations.example.json --out runs/exp1
 
 Results: runs/exp1/<config_name>/ holds the full job (ANSWER.md, NOTES.md, pi.log, run_meta.json);
 runs/exp1/results.jsonl has one summary row per config.
@@ -113,7 +113,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--query", required=True)
     ap.add_argument("--dataroom", required=True)
-    ap.add_argument("--budget", type=int, default=int(os.environ.get("TURN_BUDGET", "30")))
+    ap.add_argument("--budget", type=int, default=int(os.environ.get("TURN_BUDGET", "10")))
     ap.add_argument("--matrix", help="JSON file with the ablation matrix; default = tool ablation")
     ap.add_argument("--out", default="./runs/ablation")
     ap.add_argument("--max-seconds", type=int, default=0)

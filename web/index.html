@@ -81,7 +81,7 @@
         <span>Force budget</span>
       </label>
       <div id="budgetwrap">
-        <input type="number" id="budget" value="30" min="1" step="1" title="budget in turns (agent cycles)" />
+        <input type="number" id="budget" value="10" min="1" step="1" title="budget in turns (agent cycles)" />
         <span style="color:var(--mut);font-size:12px">turns</span>
       </div>
       <button class="btn" type="submit" id="go">Run</button>
@@ -118,7 +118,7 @@ $("force").addEventListener("change",()=>{
 $("f").addEventListener("submit",async e=>{
   e.preventDefault();
   const prompt=$("prompt").value.trim(), file=$("dataroom").files[0];
-  const force=$("force").checked, budget=parseInt($("budget").value,10)||30;
+  const force=$("force").checked, budget=parseInt($("budget").value,10)||10;
   const tools=[...document.querySelectorAll(".tool:checked")].map(c=>c.value).join(",");
   if(prompt.length<5){$("msg").textContent="prompt too short";return;}
   $("go").disabled=true;$("msg").textContent="queuing…";
