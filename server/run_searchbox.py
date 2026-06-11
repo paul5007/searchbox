@@ -180,11 +180,13 @@ def answer_present(work_dir: Path) -> bool:
 # a skill. Reason: a skill body is injected only once as an early user message, so pi's
 # compaction summarizes/dilutes it on long runs. The system prompt is present on EVERY turn and
 # is never compacted, so the task framing stays stable for the whole budget. There is no skill.
+# NOTE: we do NOT ask the model to write ANSWER.md. The harness itself captures the model's
+# final non-thinking message text each turn and saves it to ANSWER.md (see capture in drive()).
+# This keeps the framework lean - no file-writing instruction, no "write your answer" nudges.
 SYSTEM_TASK = (
     "Answer the question below using the dataroom/ folder in your working directory as your "
     "source. You have no network access. You can use all tools you have or build new tools or "
-    "workflow using existing tools. When done, write your answer to ANSWER.md in the working "
-    "directory (not inside dataroom/)."
+    "workflow using existing tools."
 )
 # The first user message is just the question (no skill expansion).
 TASK_COMMAND = "{query}"
@@ -326,11 +328,25 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
 
     send({"type": "prompt", "message": TASK_COMMAND.format(query=args.query)})
 
+    ans_path = work_dir / "ANSWER.md"
+
+    def extract_text(line: str) -> str:
+        """From a message_end event, return the concatenated non-thinking text blocks."""
+        try:
+            ev = json.loads(line)
+            content = (ev.get("message") or {}).get("content") or []
+            parts = [b.get("text", "") for b in content
+                     if isinstance(b, dict) and b.get("type") == "text"]
+            return "".join(parts).strip()
+        except Exception:
+            return ""
+
     try:
         while True:
             cycle_wd = threading.Timer(max(1, args.turn_timeout), lambda: send({"type": "abort"}))
             cycle_wd.start()
             ended = False
+            turn_text = ""  # last non-thinking assistant text this turn
             try:
                 while True:
                     line = proc.stdout.readline()
@@ -340,11 +356,23 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
                         continue
                     log.write(line)
                     record_timing(line)
+                    if '"type":"message_end"' in line:
+                        t = extract_text(line)
+                        if t:
+                            turn_text = t
                     if '"type":"agent_end"' in line:
                         ended = True; break
             finally:
                 cycle_wd.cancel()
             flush_timing(round((time.time() - start) * 1000))
+
+            # Harness-captured answer: the model's final non-thinking message this turn IS the
+            # answer. We save it to ANSWER.md ourselves - the model is never asked to write it.
+            if turn_text:
+                try:
+                    ans_path.write_text(turn_text)
+                except Exception:
+                    pass
 
             if not ended:
                 stop_reason = hard["reason"] or "error_pi_exited"; break
@@ -371,15 +399,8 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
             if turn >= args.max_turns:
                 stop_reason = "ceiling_turns"; break
 
-            # EVERY turn, regardless of force-budget: if the model has not written ANSWER.md yet,
-            # always push the write prompt and run another turn. We never stop without an answer.
-            if not answer_present(work_dir):
-                send({"type": "prompt", "message":
-                      "Write your answer to ANSWER.md now."})
-                continue
-
-            # ANSWER.md exists from here on.
-            # Force-budget OFF: one natural pass is enough -> stop as soon as the answer is in.
+            # We captured this turn's answer above (ANSWER.md = model's final message text).
+            # Force-budget OFF: one natural pass is enough -> stop now.
             if not args.force_budget:
                 stop_reason = "first_turn_done"; break
 

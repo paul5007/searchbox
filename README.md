@@ -3,7 +3,7 @@
 Give it a **prompt**, a **`.zip`** (or folder), and an **input-token budget**. A self-hosted
 model in a minimal [Pi](https://pi.dev) harness explores the dataroom with local retrieval
 (jina-embeddings-v5-text-small + jina-reranker-v3, no web) until it has spent the budget, then
-writes `ANSWER.md`.
+answers. The harness captures the model's final message as the answer (`ANSWER.md`).
 
 The point is to watch what a model does under a maximally restrained harness: given raw atomic
 primitives (an embedder and a reranker) but no instructions on how to use them, does it compose
@@ -19,16 +19,17 @@ nothing the model sees prescribes method, format, or tool choice.
    model primitives (`sentence_embed`, `passage_rerank`), so the model decides if/when/how to
    embed, store, and search.
 2. The task framing is appended to Pi's **system prompt** (`--append-system-prompt`): answer
-   from `dataroom/`, no network, use any tools or build your own workflow, write `ANSWER.md` when
-   done. The question itself is sent once as the first user message. There is no skill - the
-   system prompt is present on every turn and is never compacted, so the task stays stable for
-   the whole budget (a skill body, by contrast, is injected once and gets diluted by
-   compaction). Pi runs its own loop and compaction, untouched; the only thing added over
-   vanilla Pi is: while the budget is unspent and Pi goes idle, send a bare `Continue.`.
-3. Input tokens spent are read each cycle from the Pi session file (see
-   [Token accounting](#token-accounting)).
-4. When the budget is spent and `ANSWER.md` exists, the run stops. `run_meta.json` records the
-   stop reason, token breakdown, tool calls, timing, and config.
+   from `dataroom/`, no network, use any tools or build your own workflow. The question itself
+   is sent once as the first user message. There is no skill - the system prompt is present on
+   every turn and is never compacted, so the task stays stable for the whole budget. Pi runs its
+   own loop and compaction, untouched; the only thing added over vanilla Pi is: while the budget
+   is unspent and Pi goes idle, send a bare `Continue.`.
+3. **The harness captures the answer itself.** The model is never told to write `ANSWER.md`.
+   After each turn the harness takes the model's final non-thinking message text and saves it to
+   `ANSWER.md` (overwriting). This keeps the framework lean - no file-writing instruction, no
+   "write your answer" nudges. Input tokens spent are read each cycle from the Pi session file.
+4. Force-budget ON (default): run until the input-token budget is spent. OFF: stop after the
+   first turn. `run_meta.json` records the stop reason, token breakdown, tool calls, and config.
 
 ## What the model sees
 
@@ -36,10 +37,10 @@ Every piece of model-facing text, and nothing else:
 
 | What | Where |
 | --- | --- |
-| System prompt | Pi's default coding-assistant prompt + our appended task ([`SYSTEM_TASK`](server/run_searchbox.py)): answer from `dataroom/`, no network, use any tools or build your own workflow, write `ANSWER.md`. Present every turn, never compacted. |
+| System prompt | Pi's default coding-assistant prompt + our appended task ([`SYSTEM_TASK`](server/run_searchbox.py)): answer from `dataroom/`, no network, use any tools or build your own workflow. Present every turn, never compacted. |
 | Task delivery | [`TASK_COMMAND`](server/run_searchbox.py) — the bare question, sent once as the first user message. No skill. |
-| Keep-going nudge | [`KEEP_GOING`](server/run_searchbox.py) — `Continue. (input tokens used: x/y)` |
-| Final-answer nudge | [run_searchbox.py](server/run_searchbox.py) — `Write your answer to ANSWER.md now.` (only if budget spent but no `ANSWER.md`) |
+| Keep-going nudge | [`KEEP_GOING`](server/run_searchbox.py) — `Continue.` |
+| Answer capture | the harness saves the model's final non-thinking message to `ANSWER.md` each turn; the model is never asked to write it. |
 | `sentence_embed` | [dataroom-search.ts](pi/extensions/dataroom-search.ts) — embed text(s) with jina-embeddings-v5-text-small; APPENDS vectors to a jsonl in the work dir and returns only {path,count,dim}; the model reads the file back and does its own similarity/search |
 | `passage_rerank` | [dataroom-search.ts](pi/extensions/dataroom-search.ts) — score caller-supplied passages by relevance (jina-reranker-v3) |
 
