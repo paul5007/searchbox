@@ -190,9 +190,7 @@ SYSTEM_TASK = (
 TASK_COMMAND = "{query}"
 # Sent only to keep the run going until the input-token budget is spent (the one mechanism we
 # add over vanilla pi). No guidance on method or content.
-KEEP_GOING = (
-    "Continue. (input tokens used: {spent}/{budget})"
-)
+KEEP_GOING = "Continue."
 
 
 def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
@@ -389,7 +387,7 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
             if spent >= budget:
                 stop_reason = "budget_spent"; break
 
-            send({"type": "prompt", "message": KEEP_GOING.format(spent=spent, budget=budget)})
+            send({"type": "prompt", "message": KEEP_GOING})
     except KeyboardInterrupt:
         stop_reason = "interrupted"
     finally:
