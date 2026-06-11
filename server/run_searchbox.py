@@ -180,13 +180,14 @@ def answer_present(work_dir: Path) -> bool:
 # a skill. Reason: a skill body is injected only once as an early user message, so pi's
 # compaction summarizes/dilutes it on long runs. The system prompt is present on EVERY turn and
 # is never compacted, so the task framing stays stable for the whole budget. There is no skill.
-# NOTE: we do NOT ask the model to write ANSWER.md. The harness itself captures the model's
-# final non-thinking message text each turn and saves it to ANSWER.md (see capture in drive()).
-# This keeps the framework lean - no file-writing instruction, no "write your answer" nudges.
+# We ask the model to write ANSWER.md: without that instruction the LLM tends not to enter the
+# read->edit working loop (it just answers in chat). The harness ALSO captures the model's final
+# non-thinking message to ANSWER.md each turn as a backstop, so we get an answer either way.
 SYSTEM_TASK = (
     "Answer the question below using the dataroom/ folder in your working directory as your "
     "source. You have no network access. You can use all tools you have or build new tools or "
-    "workflow using existing tools."
+    "workflow using existing tools. Write your final answer to ANSWER.md in the working "
+    "directory (not inside dataroom/)."
 )
 # The first user message is just the question (no skill expansion).
 TASK_COMMAND = "{query}"
@@ -374,9 +375,10 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
                 cycle_wd.cancel()
             flush_timing(round((time.time() - start) * 1000))
 
-            # Harness-captured answer: the model's final non-thinking message this turn IS the
-            # answer. We save it to ANSWER.md ourselves - the model is never asked to write it.
-            if turn_text:
+            # The model is asked to write ANSWER.md itself (drives the read->edit loop). As a
+            # BACKSTOP, if it has not produced ANSWER.md yet, save its final non-thinking message
+            # this turn so a run always yields an answer. Never clobber a model-written file.
+            if turn_text and not ans_path.exists():
                 try:
                     ans_path.write_text(turn_text)
                 except Exception:
