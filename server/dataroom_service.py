@@ -99,37 +99,80 @@ _embed_cache_stats = {"hits": 0, "misses": 0}
 
 
 # --- models ------------------------------------------------------------------
+# OPENCLAW_LOCAL_OFFLOAD: resolve target device, auto-falling back to CPU when CUDA is
+# unavailable or has no usable free VRAM. EMBED_DEVICE=cuda asks for GPU; if the card is full
+# (e.g. a colocated llama-server took all VRAM) we run on CPU instead of OOMing.
+def _is_cuda_oom(e: Exception) -> bool:
+    msg = str(e).lower()
+    return ("out of memory" in msg or "cuda error" in msg or "cublas" in msg
+            or "no kernel image" in msg or ("alloc" in msg and "cuda" in msg))
+
+
+def _want_cuda() -> bool:
+    if not EMBED_DEVICE.startswith("cuda"):
+        return False
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return False
+        need = int(os.environ.get("MIN_FREE_VRAM_MB", "1500")) * 1024 * 1024
+        free, _ = torch.cuda.mem_get_info()
+        if free < need:
+            print(f"[dataroom] CUDA free {free // 1048576}MB < need {need // 1048576}MB -> CPU",
+                  flush=True)
+            return False
+        return True
+    except Exception:
+        return False
+
+
 def embed_model():
     global _embed_model
     if _embed_model is None:
         from sentence_transformers import SentenceTransformer
-        dev = EMBED_DEVICE
-        if dev.startswith("cuda"):
-            try:
-                import torch
-                if not torch.cuda.is_available():
-                    dev = "cpu"
-            except Exception:
-                dev = "cpu"
+        dev = "cuda" if _want_cuda() else "cpu"
         print(f"[dataroom] loading embed model {EMBED_MODEL} on {dev}", flush=True)
-        _embed_model = SentenceTransformer(EMBED_MODEL, device=dev, trust_remote_code=True)
+        try:
+            _embed_model = SentenceTransformer(EMBED_MODEL, device=dev, trust_remote_code=True)
+        except Exception as e:
+            if dev == "cuda" and _is_cuda_oom(e):
+                print(f"[dataroom] embed CUDA load failed ({e}); offloading to CPU", flush=True)
+                _embed_model = SentenceTransformer(EMBED_MODEL, device="cpu", trust_remote_code=True)
+            else:
+                raise
     return _embed_model
 
 
 def rerank_model():
+    """Load the local reranker. Supports jina-reranker-v3 (AutoModel) and
+    jina-reranker-v2-base-multilingual (AutoModelForSequenceClassification). Both expose
+    .rerank(query, documents, top_n=...). Auto GPU->CPU offload on OOM / full card."""
     global _rerank_model
     if _rerank_model is None:
-        from transformers import AutoModel
+        from transformers import AutoModel, AutoModelForSequenceClassification
         print(f"[dataroom] loading rerank model {RERANK_MODEL}", flush=True)
-        m = AutoModel.from_pretrained(RERANK_MODEL, dtype="auto", trust_remote_code=True)
-        m.eval()
-        if EMBED_DEVICE.startswith("cuda"):
+        last = None
+        m = None
+        for loader in (AutoModel, AutoModelForSequenceClassification):
             try:
-                import torch
-                if torch.cuda.is_available():
-                    m = m.to("cuda")
-            except Exception:
-                pass
+                m = loader.from_pretrained(RERANK_MODEL, dtype="auto", trust_remote_code=True)
+                if hasattr(m, "rerank"):
+                    break
+                m = None  # loaded but wrong class (no .rerank); try the next loader
+            except Exception as e:
+                last = e
+                continue
+        if m is None:
+            raise RuntimeError(f"could not load a reranker with .rerank() for {RERANK_MODEL}: {last}")
+        m.eval()
+        if _want_cuda():
+            try:
+                m = m.to("cuda")
+            except Exception as e:
+                if _is_cuda_oom(e):
+                    print(f"[dataroom] rerank CUDA move failed ({e}); staying on CPU", flush=True)
+                else:
+                    raise
         _rerank_model = m
     return _rerank_model
 

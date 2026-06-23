@@ -119,6 +119,23 @@ Retrieval runs on local weights by default; set `EMBED_BACKEND=api RERANK_BACKEN
 `JINA_API_KEY`) to call the Jina cloud instead. Same tools either way - only where embed/rerank
 runs changes (a clean local-vs-api ablation axis).
 
+**Local models.** The embedder runs through `sentence_transformers` and the reranker through
+`transformers`. Supported out of the box (set `EMBED_MODEL` / `RERANK_MODEL`):
+
+- embed: `jina-embeddings-v5-text-small` (default) or `jina-embeddings-v5-text-nano` (lighter)
+- rerank: `jina-reranker-v3` (default) or `jina-reranker-v2-base-multilingual`
+
+The reranker loader handles both families - v3 (`AutoModel`) and v2-base-multilingual
+(`AutoModelForSequenceClassification`) - by picking whichever class exposes `.rerank()`.
+
+**GPU with auto-CPU-offload.** `EMBED_DEVICE=cuda` runs retrieval on the GPU, but if the card has
+no headroom (e.g. a colocated LLM already filled VRAM) the loader transparently falls back to
+CPU instead of OOMing: it checks free VRAM against `MIN_FREE_VRAM_MB` (default 1500) before
+loading, and also catches CUDA OOM at load time. Default `EMBED_DEVICE=cpu` keeps all VRAM for
+the LLM. (This is why a 24 GB box already running the agent LLM serves retrieval via the API
+backend - the weights would not fit alongside the LLM - while smaller/idle boxes can run
+everything locally on GPU or CPU.)
+
 ## Scheduling (single slot)
 
 One model slot, so jobs run serially:
