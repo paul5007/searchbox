@@ -29,10 +29,10 @@
   /* Custom file picker: native input hidden, label styled like a secondary button to match
      the rest of the monospace/boxed UI. */
   input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0 0 0 0)}
-  .filebtn{display:inline-flex;align-items:center;gap:8px}
+  .filebtn{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .filebtn .pick{border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:7px 14px;cursor:pointer;font:inherit;white-space:nowrap}
   .filebtn .pick:hover{background:var(--soft)}
-  .filebtn .fname{color:var(--mut);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:340px}
+  .filebtn .fname{color:var(--mut);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
   .jobs{margin-top:36px;border-top:1px solid var(--line);padding-top:16px}
   .job{display:flex;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid var(--soft);cursor:pointer}
   .job:hover{background:var(--fill)}
@@ -77,6 +77,14 @@
         <label class="pick" for="dataroom">Choose file</label>
         <input type="file" id="dataroom" accept=".zip" />
         <span class="fname" id="fname"></span>
+        <label class="toggle" style="margin-left:18px">
+          <input type="checkbox" id="force" />
+          <span>Force budget</span>
+        </label>
+        <div id="budgetwrap" class="off">
+          <input type="number" id="budget" value="10" min="1" step="1" title="budget in turns (agent cycles)" />
+          <span style="color:var(--mut);font-size:12px">turns</span>
+        </div>
       </div>
     </div>
     <div class="field">
@@ -84,14 +92,6 @@
       <div class="tools" id="tools"></div>
     </div>
     <div class="fieldrow">
-      <label class="toggle">
-        <input type="checkbox" id="force" checked />
-        <span>Force budget</span>
-      </label>
-      <div id="budgetwrap">
-        <input type="number" id="budget" value="10" min="1" step="1" title="budget in turns (agent cycles)" />
-        <span style="color:var(--mut);font-size:12px">turns</span>
-      </div>
       <button class="btn" type="submit" id="go">Run</button>
     </div>
   </form>
