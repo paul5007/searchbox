@@ -69,12 +69,10 @@ these):
 | `cluster` | Greedy-threshold cluster caller text into near-duplicate groups. |
 | `select_diverse` | Facility-location pick of the top-k most diverse texts (drop near-dups). |
 
-This replaced an earlier flat catalog of ~22 near-duplicate entries (many were the same backend
-op under different names/argument shapes). The split makes intent obvious - a model that just
-wants an answer uses the high-level tools; one that wants control composes the primitives - and
-keeps the only stateful behavior (reaching into the corpus) confined to the explicitly
-dataroom-aware high-level tools. Built-in Pi tools (`read`, `bash`, `grep`, `find`, `ls`, `edit`,
-`write`) keep their stock descriptions.
+The split makes intent obvious - a model that just wants an answer uses the high-level tools; one
+that wants control composes the primitives - and keeps the only stateful behavior (reaching into
+the corpus) confined to the explicitly dataroom-aware high-level tools. Built-in Pi tools
+(`read`, `bash`, `grep`, `find`, `ls`, `edit`, `write`) keep their stock descriptions.
 
 All embedding flows funnel through one cached `_encode(text, role)`, so repeated text (same chunk
 across turns, same query reused, overlap between tools) is embedded at most once per job.
