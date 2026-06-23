@@ -8,8 +8,9 @@ tool-usage change as you toggle tools or swap the base model.
 Each config is a dict of ENV OVERRIDES applied to a single `server.run_searchbox` invocation.
 The reserved ablation knobs (no code edits needed to vary any of these):
 
-  SEARCHBOX_TOOLS   which dataroom tools are registered. "" = none, "sentence_embed",
-                    "passage_rerank", or "sentence_embed,passage_rerank" (default = all).
+  SEARCHBOX_TOOLS   which dataroom tools are registered. "" = none (grep/read baseline),
+                    high-level "search_dataroom,answer_question" (default), or any subset of
+                    the low-level primitives (embed_texts/rerank/similarity/classify/...).
   LLAMA_URL         OpenAI-compatible base-model server (swap the base LLM).
   MODEL_ID          agent-facing model id for that server.
   CONTEXT_WINDOW    context window for the chosen model.
@@ -33,10 +34,9 @@ REPO = Path(__file__).resolve().parent.parent
 
 # Default matrix: the tool ablation. Each entry is {name, env:{...}}.
 DEFAULT_MATRIX = [
-    {"name": "full",          "env": {"SEARCHBOX_TOOLS": "sentence_embed,passage_rerank"}},
-    {"name": "search_only",   "env": {"SEARCHBOX_TOOLS": "sentence_embed"}},
-    {"name": "rerank_only",   "env": {"SEARCHBOX_TOOLS": "passage_rerank"}},
-    {"name": "no_tools",      "env": {"SEARCHBOX_TOOLS": ""}},  # bash/read only
+    {"name": "high_level", "env": {"SEARCHBOX_TOOLS": "search_dataroom,answer_question"}},
+    {"name": "low_level",  "env": {"SEARCHBOX_TOOLS": "embed_texts,rerank,similarity"}},
+    {"name": "no_tools",   "env": {"SEARCHBOX_TOOLS": ""}},  # grep/read baseline
 ]
 
 

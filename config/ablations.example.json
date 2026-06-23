@@ -2,18 +2,18 @@
   "_comment": "Ablation matrix for scripts/ablate.py. Each entry runs the same (query, dataroom, budget-in-turns) with the given env overrides. Reserved knobs: SEARCHBOX_TOOLS (tool ablation), LLAMA_URL+MODEL_ID+CONTEXT_WINDOW (base-model ablation), EMBED_MODEL/RERANK_MODEL (retrieval ablation), TURN_BUDGET / per-entry budget (budget ablation, in turns).",
   "matrix": [
     {
-      "name": "qwen36_full",
+      "name": "qwen36_high_level",
       "env": {
-        "SEARCHBOX_TOOLS": "sentence_embed,passage_rerank",
+        "SEARCHBOX_TOOLS": "search_dataroom,answer_question",
         "LLAMA_URL": "http://127.0.0.1:8080",
         "MODEL_ID": "qwen3.6",
         "CONTEXT_WINDOW": "131072"
       }
     },
     {
-      "name": "qwen36_search_only",
+      "name": "qwen36_low_level",
       "env": {
-        "SEARCHBOX_TOOLS": "sentence_embed",
+        "SEARCHBOX_TOOLS": "embed_texts,rerank,similarity",
         "LLAMA_URL": "http://127.0.0.1:8080",
         "MODEL_ID": "qwen3.6"
       }
@@ -29,7 +29,7 @@
     {
       "name": "other_model_full",
       "env": {
-        "SEARCHBOX_TOOLS": "sentence_embed,passage_rerank",
+        "SEARCHBOX_TOOLS": "search_dataroom,answer_question",
         "LLAMA_URL": "http://127.0.0.1:8081",
         "MODEL_ID": "other-model",
         "CONTEXT_WINDOW": "65536"
@@ -38,7 +38,7 @@
     {
       "name": "embedder_nano",
       "env": {
-        "SEARCHBOX_TOOLS": "sentence_embed,passage_rerank",
+        "SEARCHBOX_TOOLS": "search_dataroom,answer_question",
         "EMBED_MODEL": "jinaai/jina-embeddings-v5-text-nano",
         "MODEL_ID": "qwen3.6"
       }
@@ -47,7 +47,7 @@
       "name": "small_budget",
       "budget": 10,
       "env": {
-        "SEARCHBOX_TOOLS": "sentence_embed,passage_rerank",
+        "SEARCHBOX_TOOLS": "search_dataroom,answer_question",
         "MODEL_ID": "qwen3.6"
       }
     }
