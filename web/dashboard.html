@@ -94,12 +94,12 @@
 <body>
 <div class="wrap">
   <header>
-    <h1><a href="/" title="Home">Searchbox</a></h1>
+    <h1><a href="#" id="homeLink" title="Home">Searchbox</a></h1>
     <div class="meta">job <b id="jid">__JOB_ID__</b> · <span id="st"><span class="dot blink"></span>connecting</span></div>
   </header>
 
   <div class="actions">
-    <a class="icon" href="/" title="All jobs"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5L5.5 8l4.5 4.5"/></svg></a>
+    <a class="icon" href="#" id="backLink" title="All jobs"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.5L5.5 8l4.5 4.5"/></svg></a>
     <a class="icon" id="dlAnswer" href="/jobs/__JOB_ID__/answer/download" title="download ANSWER.md"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5v7"/><path d="M5 6.8l3 3 3-3"/><path d="M3.5 12.5h9"/></svg></a>
     <a class="icon" id="dlTrace" href="/jobs/__JOB_ID__/trace.html" target="_blank" rel="noopener" title="open full LLM trace (HTML, incl. thinking) in new tab"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3.5h10"/><path d="M3 8h10"/><path d="M3 12.5h6"/></svg></a>
     <a class="icon" id="dlSnaps" href="/jobs/__JOB_ID__/snapshots.zip" title="download per-turn snapshots (ANSWER-t*.md + turns.jsonl, zip)"><svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h7l3 3v8h-10z"/><path d="M6 2.5v3M8 5.5v1.5M6 7v1.5M8 8.5v1.5"/></svg></a>
@@ -168,7 +168,7 @@
       </table>
     </div>
     <div class="cell">
-      <div class="k">Tool distribution <span class="sub" style="margin:0;text-transform:none;letter-spacing:0">calls · time</span></div>
+      <div class="k">Tool distribution <span class="sub" style="margin:0;text-transform:none;letter-spacing:0">calls (bash rows below = programs run inside bash)</span></div>
       <div class="dist" id="dist"><div class="empty">no calls yet</div></div>
     </div>
   </div>
@@ -194,6 +194,15 @@
 
 <script>
 const JOB="__JOB_ID__";
+// Subpath-aware base prefix. Page served at <BASE>/jobs/<id>/dashboard.
+const BASE=location.pathname.split("/jobs/")[0]||"";
+// Re-point the static header links (rendered with absolute /jobs/__JOB_ID__/... ) under BASE.
+document.addEventListener("DOMContentLoaded",()=>{
+  const hl=document.getElementById("homeLink");if(hl)hl.href=BASE+"/";
+  const bl=document.getElementById("backLink");if(bl)bl.href=BASE+"/";
+  [["dlAnswer","/answer/download"],["dlTrace","/trace.html"],["dlSnaps","/snapshots.zip"]].forEach(([id,suf])=>{const el=document.getElementById(id);if(el)el.href=BASE+"/jobs/"+JOB+suf;});
+  const fav=document.querySelector('link[rel="icon"]');if(fav)fav.href=BASE+"/favicon.svg";
+});
 const $=id=>document.getElementById(id);
 let lastOk=0;
 function human(b){if(b<1024)return b+" B";const u=["KB","MB","GB"];let i=-1;do{b/=1024;i++}while(b>=1024&&i<2);return b.toFixed(b<10?1:0)+" "+u[i];}
@@ -235,7 +244,7 @@ function applySel(){if(!selPath)return;document.querySelectorAll("#tree .f").for
 async function loadPreview(path){
   selPath=path;selImg=IMG.includes((path.split(".").pop()||"").toLowerCase());lastPrev=null;
   $("prevname").textContent=path;applySel();
-  const url=`/jobs/${JOB}/file?path=${encodeURIComponent(path)}`;
+  const url=BASE+`/jobs/${JOB}/file?path=${encodeURIComponent(path)}`;
   if(selImg){$("prev").innerHTML=`<img src="${url}" style="max-width:100%">`;return;}
   $("prev").innerHTML='<div class="empty">loading…</div>';
   try{const r=await fetch(url,{cache:"no-store"});const t=await r.text();lastPrev=t;$("prev").innerHTML=`<pre>${esc(t)}</pre>`;}
@@ -243,7 +252,7 @@ async function loadPreview(path){
 }
 async function refreshPreview(){
   if(!selPath||selImg)return;
-  try{const r=await fetch(`/jobs/${JOB}/file?path=${encodeURIComponent(selPath)}`,{cache:"no-store"});if(!r.ok)return;const t=await r.text();if(t===lastPrev)return;lastPrev=t;const box=$("prev"),top=box.scrollTop;box.innerHTML=`<pre>${esc(t)}</pre>`;box.scrollTop=top;}catch(e){}
+  try{const r=await fetch(BASE+`/jobs/${JOB}/file?path=${encodeURIComponent(selPath)}`,{cache:"no-store"});if(!r.ok)return;const t=await r.text();if(t===lastPrev)return;lastPrev=t;const box=$("prev"),top=box.scrollTop;box.innerHTML=`<pre>${esc(t)}</pre>`;box.scrollTop=top;}catch(e){}
 }
 $("tree").addEventListener("click",e=>{
   const d=e.target.closest(".dir");
@@ -273,7 +282,7 @@ function setStatus(s,done){
 
 async function tick(){
   try{
-    const r=await fetch(`/jobs/${JOB}/stats`,{cache:"no-store"});
+    const r=await fetch(BASE+`/jobs/${JOB}/stats`,{cache:"no-store"});
     if(!r.ok)throw 0;
     const d=await r.json();lastOk=Date.now();
     const live=d.job_status==="running";
@@ -328,8 +337,14 @@ async function tick(){
 
     // tool distribution: bar = call count, suffix = count (no time). bash is expanded into the
     // actual programs it ran (ls/grep/wc/...). Indent is on the name only, so all bars align.
-    const dist=d.tool_distribution||{};const ks=Object.keys(dist);const max=Math.max(1,...Object.values(dist));
+    /*OPENCLAW_DIST_FIX*/
+    const dist=d.tool_distribution||{};const ks=Object.keys(dist);
     const bash=d.bash_distribution||{};
+    // Normalize bar width over BOTH parent tools and bash child programs. The parent
+    // "bash" count is tool-call count; children are programs invoked inside those calls
+    // (one `find | xargs grep` call yields find+xargs+grep), so a child can exceed the
+    // parent. Using a global max keeps every bar within the track.
+    const max=Math.max(1,...Object.values(dist),...Object.values(bash));
     function distRow(name,n,indent){const nm=(indent?'└ ':'')+name;return `<div class="row"><span class="name">${esc(nm)}</span><span class="track"><i style="width:${100*n/max}%"></i></span><span class="n">${n}</span></div>`;}
     $("dist").innerHTML=ks.length?ks.map(k=>{
       let h=distRow(k,dist[k],false);

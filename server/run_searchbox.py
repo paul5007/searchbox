@@ -189,12 +189,27 @@ def answer_present(work_dir: Path) -> bool:
 # We ask the model to write ANSWER.md: without that instruction the LLM tends not to enter the
 # read->edit working loop (it just answers in chat). The harness ALSO captures the model's final
 # non-thinking message to ANSWER.md each turn as a backstop, so we get an answer either way.
-SYSTEM_TASK = (
+SYSTEM_TASK_TMPL = (
+    "Today is {today}.\n"
     "Answer the question below using the dataroom/ folder in your working directory as your "
     "source. You have no network access. You can use all tools you have or build new tools or "
     "workflow using existing tools. Write your final answer to ANSWER.md in the working "
     "directory (not inside dataroom/)."
 )
+
+
+def build_system_task():
+    """System prompt with the current date injected (so time-relative questions like
+    'who left in 2026' have a clock). TZ via SEARCHBOX_TZ env, default America/Los_Angeles."""
+    tz_name = os.environ.get("SEARCHBOX_TZ", "America/Los_Angeles")
+    try:
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        today = datetime.now(ZoneInfo(tz_name)).strftime("%A, %B %d, %Y")
+    except Exception:
+        from datetime import datetime
+        today = datetime.now().strftime("%A, %B %d, %Y")
+    return SYSTEM_TASK_TMPL.format(today=today)
 # The first user message is just the question (no skill expansion).
 TASK_COMMAND = "{query}"
 # Sent only to keep the run going until the input-token budget is spent (the one mechanism we
@@ -208,7 +223,7 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
     env["PI_SKIP_VERSION_CHECK"] = "1"
     cmd = [os.environ.get("PI_BIN", "pi"), "--mode", "rpc",
            "--no-skills",
-           "--append-system-prompt", SYSTEM_TASK,
+           "--append-system-prompt", build_system_task(),
            "--extension", str(REPO / "pi" / "extensions" / "dataroom-search.ts")]
     # On resume, continue the prior pi session (same agent_dir) instead of starting fresh.
     if getattr(args, "resume", False):

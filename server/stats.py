@@ -165,6 +165,9 @@ _CMD_SEP = {"|", "||", "&&", ";", "&", "(", "{", "|&"}
 # Keywords whose following token is also a command position.
 _CMD_KW = {"then", "do", "else", "elif", "!", "time", "xargs", "sudo", "nohup", "command", "exec", "env"}
 _PROG_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._+-]*$")
+# Redirection tokens: optional fd, a > < or >> or <<, optional target glued on (2>/dev/null,
+# >out.txt, >&2, <in). Also bare operators after shlex splitting.
+_REDIR_RE = re.compile(r"^\d*(?:>>?|<<?)[&]?.*$|^[<>]$")
 
 
 def _bash_programs(cmd: str):
@@ -189,6 +192,10 @@ def _bash_programs(cmd: str):
         if not expect:
             continue
         # at a command position now
+        # OPENCLAW_BASHPARSE_FIX: skip redirections that land here (e.g. `; 2>/dev/null`, `> f`),
+        # otherwise `2>/dev/null` -> basename `null` is miscounted as a program.
+        if _REDIR_RE.match(tk):
+            continue  # stay in command-expect state; the real program follows
         if "=" in tk and _PROG_RE.match(tk.split("=", 1)[0]):
             continue  # VAR=val prefix -> command is still the next token
         expect = False

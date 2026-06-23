@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Searchbox: budget-bounded closed-dataroom QA</title>
 <meta name="description" content="Give a prompt, a zip, and a turn budget. A self-hosted model in a Pi harness explores the dataroom with local jina retrieval for that many turns, then answers fully cited." />
-<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
 <meta name="theme-color" content="#000000" />
 <style>
   :root{--bg:#fff;--fg:#000;--mut:#666;--line:#000;--soft:#e5e5e5;--fill:#f5f5f5}
@@ -99,12 +99,15 @@
   </div>
 </div>
 <script>
+// Subpath-aware base prefix: empty when served at /, '/searchbox' when mounted under
+// hanxiao.io/searchbox via the CF worker. Derived from the path this page was served at.
+const BASE=(location.pathname.replace(/\/+$/,'')||'');
 const $=id=>document.getElementById(id);
 const escn=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 // Load the external-tool catalog and render the toggle list.
 (async()=>{
   try{
-    const r=await fetch("/tools",{cache:"no-store"});const d=await r.json();
+    const r=await fetch(BASE+"/tools",{cache:"no-store"});const d=await r.json();
     const tools=d.tools||[];
     $("tools").innerHTML=tools.map(t=>
       `<label class="toggle" title="${escn(t.desc)}"><input type="checkbox" class="tool" value="${escn(t.name)}" checked /><span>${escn(t.name)}</span></label>`
@@ -129,10 +132,10 @@ $("f").addEventListener("submit",async e=>{
   const fd=new FormData();fd.append("prompt",prompt);fd.append("budget",budget);fd.append("force_budget",force?"true":"false");fd.append("tools",tools);
   if(file)fd.append("dataroom",file);
   try{
-    const r=await fetch("/jobs",{method:"POST",body:fd});
+    const r=await fetch(BASE+"/jobs",{method:"POST",body:fd});
     const d=await r.json();
     if(!r.ok)throw new Error(d.detail||"error");
-    location.href=`/jobs/${d.job_id}/dashboard`;
+    location.href=BASE+`/jobs/${d.job_id}/dashboard`;
   }catch(err){$("msg").textContent="failed: "+(err.message||err);$("go").disabled=false;}
 });
 const esc=s=>String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
@@ -150,7 +153,7 @@ function statusLabel(j){
   if(j.status==="held")return "held";
   return j.status;
 }
-async function jobAction(id,act){try{await fetch(`/jobs/${id}/${act}`,{method:"POST"});loadJobs();}catch(e){}}
+async function jobAction(id,act){try{await fetch(BASE+`/jobs/${id}/${act}`,{method:"POST"});loadJobs();}catch(e){}}
 function acts(j){
   const done=(j.status==="done"||j.status==="stopped");
   const dis=done?"":'aria-disabled="true"';
@@ -160,19 +163,20 @@ function acts(j){
   if(running)ctl=`<span class="icon" title="pause (sticky: held until you resume)" onclick="event.stopPropagation();jobAction('${j.job_id}','pause')">${ICON.pause}</span>`;
   else if(paused)ctl=`<span class="icon" title="resume" onclick="event.stopPropagation();jobAction('${j.job_id}','resume')">${ICON.resume}</span>`;
   return ctl+
-         `<a class="icon" ${dis} title="download ANSWER.md" href="/jobs/${j.job_id}/answer/download" onclick="event.stopPropagation()">${ICON.md}</a>`+
-         `<a class="icon" ${dis} title="download full LLM trace (HTML, incl. thinking)" href="/jobs/${j.job_id}/trace.html" onclick="event.stopPropagation()">${ICON.trace}</a>`;
+         `<a class="icon" ${dis} title="download ANSWER.md" href="${BASE}/jobs/${j.job_id}/answer/download" onclick="event.stopPropagation()">${ICON.md}</a>`+
+         `<a class="icon" ${dis} title="download full LLM trace (HTML, incl. thinking)" href="${BASE}/jobs/${j.job_id}/trace.html" onclick="event.stopPropagation()">${ICON.trace}</a>`;
 }
 async function loadJobs(){
   try{
-    const r=await fetch("/jobs",{cache:"no-store"});const d=await r.json();
+    const r=await fetch(BASE+"/jobs",{cache:"no-store"});const d=await r.json();
     const rows=(d.jobs||[]);
     $("jobs").innerHTML=rows.length?rows.map(j=>{
-      const pct=Math.max(0,Math.min(100,j.percent||0));
+      const term=(j.status==="done"||j.status==="stopped");
+      const pct=term?100:Math.max(0,Math.min(100,j.percent||0));
       const over=(j.budget&&(j.spent||0)>j.budget)?" over":"";
       const lab=`${esc(statusLabel(j))}${j.budget?` · ${j.spent||0}/${j.budget}`:""}`;
-      const prog=`<span class="lab">${lab}</span><span class="pbar${over}" title="${pct}%"><i style="width:${pct}%"></i></span>`;
-      return `<div class="job" onclick="location.href='/jobs/${j.job_id}/dashboard'">`+
+      const prog=`<span class="lab">${lab}</span>`;
+      return `<div class="job" onclick="location.href=BASE+'/jobs/${j.job_id}/dashboard'">`+
         `<span class="st">${dot(j.status)}</span>`+
         `<span class="q" title="${esc(j.query)}">${esc(j.query)||"(no prompt)"}</span>`+
         `<span class="pg">${prog}</span>`+
@@ -181,6 +185,33 @@ async function loadJobs(){
   }catch(e){}
 }
 loadJobs();setInterval(loadJobs,4000);
+
+// Shared-backend contention hint: the L4 llama-server has 3 slots shared across
+// dataroom / KG / searchbox / llamaui. Poll the public slots endpoint (CORS-open)
+// and surface a banner when other work is in flight, so a queued run is expected.
+(function(){
+  var SLOTS_URL="https://hanxiao.io/llama-api/slots";
+  var el=document.createElement("div");
+  el.id="slotbar";
+  el.style.cssText="display:none;margin-top:14px;border:1px solid var(--line);padding:8px 12px;font-size:12px;background:var(--fill);color:var(--fg)";
+  var mh=document.querySelector(".masthead");
+  if(mh&&mh.parentNode) mh.parentNode.insertBefore(el, mh.nextSibling);
+  async function poll(){
+    try{
+      var r=await fetch(SLOTS_URL,{cache:"no-store"});
+      var s=await r.json();
+      var busy=s.filter(function(x){return x.is_processing;}).length;
+      var total=s.length;
+      if(busy>=1){
+        el.style.display="block";
+        var warn=busy>=total;
+        el.innerHTML="● shared L4 backend: <b>"+busy+"/"+total+"</b> slots busy"+(warn?" — all slots in use, new runs will queue":" — a concurrent run may slow generation");
+        el.style.borderColor=warn?"#b00":"var(--line)";
+      }else{ el.style.display="none"; }
+    }catch(e){ el.style.display="none"; }
+  }
+  poll();setInterval(poll,4000);
+})();
 </script>
 </body>
 </html>
