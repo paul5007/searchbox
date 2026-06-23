@@ -3,7 +3,7 @@
 FROM ghcr.io/hanxiao/dataroom:latest
 
 ENV PI_BIN=pi PI_SKIP_VERSION_CHECK=1
-ARG PI_VERSION=0.79.10
+ARG PI_VERSION=0.80.1
 RUN npm install -g @earendil-works/pi-coding-agent@${PI_VERSION} && npm cache clean --force
 # Patch pi auto-compaction re-entrancy race (Cannot read properties of undefined (reading signal)).
 # Idempotent; see scripts/pi_compaction_patch.py. Re-applied on every rebuild so a pi bump keeps it.
