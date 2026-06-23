@@ -335,8 +335,8 @@ async def create(prompt: str = Form(...), budget: int = Form(...),
     if budget < 1:
         raise HTTPException(400, "budget (turns) must be >= 1")
     # `tools` is a comma-separated list of external tools to register for this job (subset of
-    # sentence_embed, passage_rerank, semantic_search). Empty string => no external tools (pi
-    # built-ins only). None/missing => leave unset (extension uses its DEFAULT_TOOLS).
+    # the catalog: high-level search_dataroom/answer_question + low-level primitives). Empty
+    # string => no external tools (pi built-ins only). None/missing => extension DEFAULT_TOOLS.
     tools_sel = None
     if tools is not None:
         allowed = _catalog_names()
@@ -625,6 +625,7 @@ def tools_catalog():
         desc = str(t.get("desc", ""))
         short = desc.split(". INPUT")[0].split(". ")[0][:140]
         out.append({"name": t.get("name"), "op": t.get("op"),
+                    "group": t.get("group", "low"),
                     "default": bool(t.get("default")), "desc": short})
     return {"tools": out}
 

@@ -55,6 +55,10 @@
   .toggle input{width:14px;height:14px;accent-color:var(--fg);cursor:pointer}
   .tools{display:flex;flex-wrap:wrap;gap:16px}
   .tools .toggle{text-transform:none;letter-spacing:0;font-size:12px;color:var(--fg)}
+  .tools{flex-direction:column;gap:10px}
+  .toolgroup{border:1px solid var(--line);padding:8px 10px}
+  .grouphead{text-transform:none;letter-spacing:0;font-size:12px;font-weight:600;color:var(--fg)}
+  .grouptools{display:flex;flex-wrap:wrap;gap:14px;margin-top:8px;padding-left:22px}
   #budgetwrap.off{opacity:.35;pointer-events:none}
 </style>
 </head>
@@ -107,12 +111,42 @@ const escn=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;"
 // Load the external-tool catalog and render the toggle list.
 (async()=>{
   try{
+    /*OPENCLAW_TOOL_GROUPS*/
     const r=await fetch(BASE+"/tools",{cache:"no-store"});const d=await r.json();
     const tools=d.tools||[];
-    $("tools").innerHTML=tools.map(t=>
-      `<label class="toggle" title="${escn(t.desc)}"><input type="checkbox" class="tool" value="${escn(t.name)}" checked /><span>${escn(t.name)}</span></label>`
-    ).join("");
-    $("toolcount").textContent=`(${tools.length} available, all embedding/rerank based)`;
+    // Group tools by tier (high/low). Each group gets a master toggle that checks/unchecks
+    // every tool in it. A tool is checked by default iff its catalog default flag is set.
+    const GROUP_META={high:{label:"High-level (task tools)",desc:"You say what you want; the tool runs the whole pipeline over the dataroom."},low:{label:"Low-level (model primitives)",desc:"Stateless single-model ops on data you pass in."}};
+    const order=["high","low"];
+    const groups={};
+    for(const t of tools){(groups[t.group||"low"]=groups[t.group||"low"]||[]).push(t);}
+    const keys=order.filter(k=>groups[k]).concat(Object.keys(groups).filter(k=>!order.includes(k)));
+    $("tools").innerHTML=keys.map(g=>{
+      const meta=GROUP_META[g]||{label:g,desc:""};
+      const rows=groups[g].map(t=>
+        `<label class="toggle" title="${escn(t.desc)}"><input type="checkbox" class="tool" data-group="${escn(g)}" value="${escn(t.name)}" ${t.default?"checked":""} /><span>${escn(t.name)}</span></label>`
+      ).join("");
+      return `<div class="toolgroup"><label class="toggle grouphead" title="${escn(meta.desc)}"><input type="checkbox" class="groupmaster" data-group="${escn(g)}" /><span>${escn(meta.label)}</span></label><div class="grouptools">${rows}</div></div>`;
+    }).join("");
+    // Wire master toggles + keep them in sync with member state.
+    function syncMaster(g){
+      const members=[...document.querySelectorAll(`.tool[data-group="${g}"]`)];
+      const m=document.querySelector(`.groupmaster[data-group="${g}"]`);
+      if(!m)return;
+      const on=members.filter(c=>c.checked).length;
+      m.checked=on===members.length&&members.length>0;
+      m.indeterminate=on>0&&on<members.length;
+    }
+    document.querySelectorAll(".groupmaster").forEach(m=>{
+      m.addEventListener("change",()=>{
+        const g=m.dataset.group;
+        document.querySelectorAll(`.tool[data-group="${g}"]`).forEach(c=>{c.checked=m.checked;});
+        m.indeterminate=false;
+      });
+    });
+    document.querySelectorAll(".tool").forEach(c=>c.addEventListener("change",()=>syncMaster(c.dataset.group)));
+    keys.forEach(syncMaster);
+    $("toolcount").textContent=`(${tools.length} available, ${keys.length} groups, embedding/rerank based)`;
   }catch(e){$("tools").innerHTML='<span class="msg">could not load tools</span>';}
 })();
 $("dataroom").addEventListener("change",()=>{

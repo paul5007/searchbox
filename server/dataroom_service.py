@@ -89,6 +89,14 @@ _rerank_model = None
 # nothing - it just lives for the process. No boot index, no on-disk precompute.
 _scope_cache: dict = {}
 
+# OPENCLAW_EMBED_CACHE: precise per-(text,role) embedding cache. Content-keyed (exact string match),
+# so identical passages/queries across turns and across tools are embedded at most once per
+# job process. All embedding paths funnel through _encode, so caching here accelerates embed,
+# search, similarity, classify, cluster, deduplicate, and answer uniformly. Memory-bounded by
+# unique text count in a single job (typically a few thousand chunks); fine for a sidecar.
+_embed_cache: dict = {}
+_embed_cache_stats = {"hits": 0, "misses": 0}
+
 
 # --- models ------------------------------------------------------------------
 def embed_model():
@@ -143,7 +151,7 @@ def _encode_api(texts, role: str) -> np.ndarray:
     return arr
 
 
-def _encode(texts, role: str) -> np.ndarray:
+def _encode_raw(texts, role: str) -> np.ndarray:
     """Encode with the retrieval adapter + role-specific prompt (query vs document).
 
     Routes to the Jina cloud API when EMBED_BACKEND=api; otherwise the local model.
@@ -166,6 +174,27 @@ def _encode(texts, role: str) -> np.ndarray:
         except (TypeError, ValueError, KeyError):
             continue
     return np.asarray(m.encode(texts, normalize_embeddings=True), dtype=np.float32)
+
+
+def _encode(texts, role: str) -> np.ndarray:
+    """Cached front-end for _encode_raw. Returns embeddings for `texts` in order, embedding
+    only the ones not already cached for this (text, role). Cache is per job process."""
+    texts = list(texts)
+    if not texts:
+        return np.zeros((0, 0), dtype=np.float32)
+    miss_idx, miss_texts = [], []
+    for i, t in enumerate(texts):
+        if (role, t) not in _embed_cache:
+            miss_idx.append(i)
+            miss_texts.append(t)
+    if miss_texts:
+        _embed_cache_stats["misses"] += len(miss_texts)
+        vecs = _encode_raw(miss_texts, role)
+        vecs = np.asarray(vecs, dtype=np.float32)
+        for j, i in enumerate(miss_idx):
+            _embed_cache[(role, texts[i])] = vecs[j]
+    _embed_cache_stats["hits"] += len(texts) - len(miss_texts)
+    return np.asarray([_embed_cache[(role, t)] for t in texts], dtype=np.float32)
 
 
 # --- dataroom indexing ---------------------------------------------------------
@@ -315,6 +344,46 @@ async def search(req: Request):
     return {"results": results, "scope_chunks": int(embs.shape[0]), "scope_files": len(files)}
 
 
+@app.post("/answer")
+async def answer(req: Request):
+    """High-level two-stage QA retrieval: dense-retrieve a WIDE candidate set from the
+    dataroom (embedding search), then cross-encoder RERANK to keep the few best supporting
+    passages. Backs the answer_question tool. body: {query|question, k=5, paths?, fetch_k?}.
+    Returns {results:[{path,chunk,score,text}]} reranked, plus scope stats."""
+    body = await req.json()
+    q = body.get("query") or body.get("question") or ""
+    if not q:
+        return {"results": [], "scope_chunks": 0}
+    k = int(body.get("k", 5))
+    fetch_k = int(body.get("fetch_k", max(20, k * 6)))
+    size = int(body.get("chunk_size", CHUNK_SIZE))
+    overlap = int(body.get("chunk_overlap", CHUNK_OVERLAP))
+    files = _resolve_paths(body.get("paths"))
+    if not files:
+        return {"results": [], "scope_chunks": 0}
+    key = (tuple(sorted(os.path.relpath(f, DATAROOM_DIR) for f in files)), size, overlap)
+    cached = _scope_cache.get(key)
+    if cached is None:
+        embs, meta = _build_scope(files, size, overlap)
+        _scope_cache[key] = cached = {"embs": embs, "meta": meta}
+    embs, meta = cached["embs"], cached["meta"]
+    if embs is None or embs.shape[0] == 0:
+        return {"results": [], "scope_chunks": 0}
+    # stage 1: dense retrieve wide
+    qe = _encode([q], role="query")[0]
+    sims = embs @ qe
+    cand = np.argsort(-sims)[:fetch_k]
+    cand_texts = [meta[i]["text"] for i in cand]
+    # stage 2: cross-encoder rerank narrow
+    ranked = _rerank_texts(q, cand_texts, top_n=k)
+    results = []
+    for r in ranked:
+        ci = cand[int(r["index"])]
+        results.append({"path": meta[ci]["path"], "chunk": int(meta[ci]["chunk"]),
+                        "score": round(float(r["score"]), 4), "text": meta[ci]["text"]})
+    return {"results": results, "scope_chunks": int(embs.shape[0]), "scope_files": len(files)}
+
+
 @app.post("/embed")
 async def embed(req: Request):
     """Atomic embedding primitive: embed caller-supplied texts and APPEND the vectors to a jsonl
@@ -356,6 +425,27 @@ async def embed(req: Request):
         rel = out_name
     return {"path": out_path, "relpath": rel, "count": appended, "dim": dim, "role": role,
             "appended": appended}
+
+
+def _rerank_texts(q: str, docs: list, top_n=None) -> list:
+    """Cross-encoder rerank helper -> [{index,score,text}] sorted desc. index is into docs."""
+    docs = list(docs)
+    if not q or not docs:
+        return []
+    if RERANK_BACKEND == "api":
+        payload = {"model": API_RERANK_MODEL, "query": q, "documents": docs}
+        if top_n is not None:
+            payload["top_n"] = int(top_n)
+        d = _api_post("rerank", payload)
+        return [{"score": float(r.get("relevance_score", 0.0)),
+                 "text": (r.get("document") or {}).get("text", "") if isinstance(r.get("document"), dict)
+                         else r.get("document", ""),
+                 "index": int(r.get("index", -1))} for r in d.get("results", [])]
+    m = rerank_model()
+    kwargs = {"top_n": int(top_n)} if top_n is not None else {}
+    ranked = m.rerank(q, docs, **kwargs)
+    return [{"score": float(r.get("relevance_score", 0.0)),
+             "text": r.get("document", ""), "index": int(r.get("index", -1))} for r in ranked]
 
 
 @app.post("/rerank")
@@ -500,6 +590,7 @@ async def stats(_: Request):
     files = sorted(os.path.relpath(f, DATAROOM_DIR) for f in _dataroom_files())
     return {"files": files, "file_count": len(files),
             "embedded_scopes": len(_scope_cache),
+            "embed_cache": dict(_embed_cache_stats, unique=len(_embed_cache)),
             "embed_backend": EMBED_BACKEND, "rerank_backend": RERANK_BACKEND,
             "embed_model": API_EMBED_MODEL if EMBED_BACKEND == "api" else EMBED_MODEL,
             "rerank_model": API_RERANK_MODEL if RERANK_BACKEND == "api" else RERANK_MODEL,
