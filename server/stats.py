@@ -139,22 +139,39 @@ def _iter_events(log_path: Path):
         src.close()
 
 
+# Primary "what" argument per tool, in priority order. First present one is shown quoted.
+_PRIMARY_ARGS = ("query", "question", "topic", "claim", "text", "prompt")
+# Numeric/scalar params worth surfacing as key=value suffixes.
+_SCALAR_ARGS = ("k", "top_n", "threshold", "role", "out")
+# List params: show name + length, e.g. documents=12.
+_LIST_ARGS = ("texts", "documents", "passages", "candidates", "items", "strings",
+              "labels", "a", "b", "queries", "paths")
+
+
 def _summarize(tool: str, args) -> str:
     a = args if isinstance(args, dict) else {}
     try:
-        if tool == "sentence_embed":
-            texts = a.get("texts")
-            n = len(texts) if isinstance(texts, list) else (1 if texts else 0)
-            return f"embed {n} text(s) role={a.get('role','passage')}".strip()
-        if tool == "semantic_search":  # legacy runs
-            return f"search {str(a.get('query',''))[:80]}".strip()
-        if tool == "passage_rerank":
-            return f"rerank {str(a.get('query',''))[:80]}".strip()
         if tool == "bash":
             cmd = re.sub(r"\s+", " ", str(a.get("command") or a.get("cmd") or "")).strip()
             return f"$ {cmd[:400]}".strip()
         if tool in ("read", "write", "edit"):
             return f"{tool} {str(a.get('path') or a.get('file') or '')[:80]}".strip()
+        # OPENCLAW_SUMMARIZE_PARAMS: generic external-tool param rendering (catalog-driven shapes).
+        parts = []
+        for k in _PRIMARY_ARGS:
+            v = a.get(k)
+            if isinstance(v, str) and v.strip():
+                parts.append(f'"{v.strip()[:80]}"')
+                break
+        for k in _LIST_ARGS:
+            v = a.get(k)
+            if isinstance(v, list) and v:
+                parts.append(f"{k}={len(v)}")
+        for k in _SCALAR_ARGS:
+            v = a.get(k)
+            if v is not None and not (isinstance(v, str) and not v.strip()):
+                parts.append(f"{k}={v}")
+        return f"{tool}: {' '.join(parts)}".strip() if parts else tool
     except Exception:
         pass
     return tool
