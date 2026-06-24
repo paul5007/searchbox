@@ -51,6 +51,11 @@ DATAROOM_DIR = os.path.abspath(os.environ.get("DATAROOM_DIR", "dataroom"))
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "jinaai/jina-embeddings-v5-text-small")
 RERANK_MODEL = os.environ.get("RERANK_MODEL", "jinaai/jina-reranker-v3")
 EMBED_TASK = os.environ.get("EMBED_TASK", "retrieval")
+# ONNX CPU backend (R06a, #18). Opt-in; fail-closed. NOTE: the default embedder
+# (jina-embeddings-v5-text-small) ships a custom_st.py that hard-rejects any backend!=torch
+# ("Backend 'onnx' is not supported") and publishes no onnx weights — so EMBED_ONNX=1 errors
+# out cleanly on v5 (see discovery issue). It is wired for a future onnx-capable EMBED_MODEL.
+EMBED_ONNX = os.environ.get("EMBED_ONNX", "0") == "1"
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1400"))
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "180"))
 
@@ -141,6 +146,23 @@ def embed_model():
             if _embed_model is None:
                 from sentence_transformers import SentenceTransformer
                 dev = "cuda" if _want_cuda() else "cpu"
+                if EMBED_ONNX:
+                    # R06a (#18): ONNX CPU backend, opt-in. Fail-closed — if the model cannot load
+                    # via onnx (e.g. jina-v5 custom_st rejects backend!=torch, or no onnx weights),
+                    # raise a structured error rather than silently serving fp32 the operator did
+                    # not ask for (that would hide a misconfig and mask the expected speedup).
+                    print(f"[dataroom] loading embed model {EMBED_MODEL} via ONNX (CPU)", flush=True)
+                    try:
+                        _embed_model = SentenceTransformer(
+                            EMBED_MODEL, backend="onnx",
+                            model_kwargs={"provider": "CPUExecutionProvider"},
+                            trust_remote_code=True)
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"EMBED_ONNX=1 but {EMBED_MODEL} cannot load via ONNX ({type(e).__name__}: {e}). "
+                            f"This model may reject backend='onnx' or publish no onnx weights. "
+                            f"Set EMBED_ONNX=0 to use the fp32 PyTorch backend.") from e
+                    return _embed_model
                 print(f"[dataroom] loading embed model {EMBED_MODEL} on {dev}", flush=True)
                 try:
                     _embed_model = SentenceTransformer(EMBED_MODEL, device=dev, trust_remote_code=True)
