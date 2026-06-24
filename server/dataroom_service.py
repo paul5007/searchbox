@@ -20,7 +20,7 @@ Endpoints (POST JSON):
   /rerank  {query, documents[], top_n?}                          -> reranker-v3 ordering
   /stats   {}                                                    -> {files, file_count, models}
 """
-import os, json, glob, hashlib, time
+import os, json, glob, hashlib, time, threading
 import numpy as np
 import anyio
 from fastapi import FastAPI, Request
@@ -127,20 +127,28 @@ def _want_cuda() -> bool:
         return False
 
 
+# Load locks: the boot warm thread (R05) and the threadpool request threads (R04) can call a
+# model loader concurrently; double-checked locking ensures each model is built exactly once.
+_embed_load_lock = threading.Lock()
+_rerank_load_lock = threading.Lock()
+
+
 def embed_model():
     global _embed_model
     if _embed_model is None:
-        from sentence_transformers import SentenceTransformer
-        dev = "cuda" if _want_cuda() else "cpu"
-        print(f"[dataroom] loading embed model {EMBED_MODEL} on {dev}", flush=True)
-        try:
-            _embed_model = SentenceTransformer(EMBED_MODEL, device=dev, trust_remote_code=True)
-        except Exception as e:
-            if dev == "cuda" and _is_cuda_oom(e):
-                print(f"[dataroom] embed CUDA load failed ({e}); offloading to CPU", flush=True)
-                _embed_model = SentenceTransformer(EMBED_MODEL, device="cpu", trust_remote_code=True)
-            else:
-                raise
+        with _embed_load_lock:
+            if _embed_model is None:
+                from sentence_transformers import SentenceTransformer
+                dev = "cuda" if _want_cuda() else "cpu"
+                print(f"[dataroom] loading embed model {EMBED_MODEL} on {dev}", flush=True)
+                try:
+                    _embed_model = SentenceTransformer(EMBED_MODEL, device=dev, trust_remote_code=True)
+                except Exception as e:
+                    if dev == "cuda" and _is_cuda_oom(e):
+                        print(f"[dataroom] embed CUDA load failed ({e}); offloading to CPU", flush=True)
+                        _embed_model = SentenceTransformer(EMBED_MODEL, device="cpu", trust_remote_code=True)
+                    else:
+                        raise
     return _embed_model
 
 
@@ -149,7 +157,11 @@ def rerank_model():
     jina-reranker-v2-base-multilingual (AutoModelForSequenceClassification). Both expose
     .rerank(query, documents, top_n=...). Auto GPU->CPU offload on OOM / full card."""
     global _rerank_model
-    if _rerank_model is None:
+    if _rerank_model is not None:
+        return _rerank_model
+    with _rerank_load_lock:
+        if _rerank_model is not None:
+            return _rerank_model
         from transformers import AutoModel, AutoModelForSequenceClassification
         print(f"[dataroom] loading rerank model {RERANK_MODEL}", flush=True)
         last = None
@@ -701,6 +713,47 @@ async def stats(_: Request):
             "dataroom_dir": DATAROOM_DIR}
 
 
+# --- boot warmup (R05) -------------------------------------------------------
+# Models otherwise load lazily on the FIRST /search or /rerank — inside a timed agent turn.
+# Warm them in a daemon thread at boot, overlapping Pi's own multi-second startup, so the first
+# real retrieval call hits warm weights. WARMUP=0 restores lazy loading.
+WARMUP = os.environ.get("WARMUP", "1") != "0"
+# Shared readiness state (consumed by /ready, R05b). done=warm thread finished (or skipped).
+_ready = {"done": False, "embed": False, "rerank": False, "error": None}
+
+
+def _warmup():
+    """Load + exercise both models once. Errors are logged, not fatal: the sidecar stays up and
+    lazy-loads on first use, so a warm failure degrades to the pre-warmup behavior."""
+    t0 = time.time()
+    try:
+        embed_model()
+        _encode(["warmup"], "passage")
+        _ready["embed"] = True
+    except Exception as e:
+        _ready["error"] = f"embed: {str(e)[:200]}"
+        print(f"[dataroom] embed warmup failed: {e}", flush=True)
+    try:
+        rerank_model()
+        _rerank_texts("warmup query", ["warmup document"], top_n=1)
+        _ready["rerank"] = True
+    except Exception as e:
+        _ready["error"] = (f"{_ready['error']}; " if _ready["error"] else "") + f"rerank: {str(e)[:200]}"
+        print(f"[dataroom] rerank warmup failed: {e}", flush=True)
+    _ready["done"] = True
+    print(f"[dataroom] warmup done in {time.time()-t0:.1f}s "
+          f"(embed={_ready['embed']} rerank={_ready['rerank']})", flush=True)
+
+
+def _start_warmup():
+    if not WARMUP:
+        _ready["done"] = True   # nothing to warm -> immediately ready (lazy load path)
+        return
+    threading.Thread(target=_warmup, name="warmup", daemon=True).start()
+
+
 if __name__ == "__main__":
-    # No index is built at boot. Models load lazily on first /search or /rerank.
+    # Kick model warmup in the background, then serve. Warmup overlaps Pi startup; the first
+    # real /search/rerank hits warm weights instead of paying the load inside a timed turn.
+    _start_warmup()
     uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("DATAROOM_PORT", "8078")))
