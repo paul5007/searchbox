@@ -116,6 +116,36 @@ def _walk_tree(root: Path):
 MAX_LOG_BYTES = 24 * 1024 * 1024
 
 
+def _event_from_line(raw: bytes):
+    """Decode one raw pi.log line into an event dict, or None to skip it.
+
+    Single source of truth for line→event so the full and incremental parsers fold
+    byte-identical event streams. message_update is dropped (streaming spam); the RPC
+    session banner becomes a synthetic _session_start (it resets the errors window)."""
+    if b'"type":"message_update"' in raw:
+        return None
+    if b"===== RPC SESSION" in raw:
+        return {"type": "_session_start"}
+    if not raw.lstrip().startswith(b"{"):
+        return None
+    try:
+        return json.loads(raw.decode("utf-8", "ignore"))
+    except Exception:
+        return None
+
+
+def _tailcap_start(log_path: Path, size: int) -> int:
+    """Byte offset where the full parser effectively starts reading: 0 unless the file
+    exceeds MAX_LOG_BYTES, in which case it seeks to size-MAX_LOG_BYTES and discards the
+    partial first line. Reproduced here so the incremental cursor matches full output."""
+    if size <= MAX_LOG_BYTES:
+        return 0
+    with open(log_path, "rb") as f:
+        f.seek(size - MAX_LOG_BYTES)
+        partial = f.readline()  # discarded by the full parser
+        return size - MAX_LOG_BYTES + len(partial)
+
+
 def _iter_events(log_path: Path):
     if not log_path.exists():
         return
@@ -125,16 +155,9 @@ def _iter_events(log_path: Path):
         src.seek(size - MAX_LOG_BYTES); src.readline()
     try:
         for raw in src:
-            if b'"type":"message_update"' in raw:
-                continue
-            if b"===== RPC SESSION" in raw:
-                yield {"type": "_session_start"}; continue
-            if not raw.lstrip().startswith(b"{"):
-                continue
-            try:
-                yield json.loads(raw.decode("utf-8", "ignore"))
-            except Exception:
-                continue
+            ev = _event_from_line(raw)
+            if ev is not None:
+                yield ev
     finally:
         src.close()
 
@@ -222,73 +245,167 @@ def _bash_programs(cmd: str):
     return progs or ["bash"]
 
 
-def parse_pi_log(log_path: Path) -> dict:
-    tool_counts, tool_calls = {}, 0
-    bash_counts = {}
-    turns = steps = compactions = 0
-    recent, errors = [], []
-    for ev in _iter_events(log_path):
-        t = ev.get("type")
-        if t == "_session_start":
-            errors = []
-        elif t == "agent_start":
-            turns += 1
-        elif t == "turn_start":
-            steps += 1
-        elif t == "compaction_end":
-            # Count only SUCCESSFUL compactions. pi can fire compaction_start then fail in
-            # compaction_end (aborted, or errorMessage set, e.g. the known "reading 'signal'"
-            # auto-compaction bug); those produce no session entry and must not be counted.
-            failed = bool(ev.get("aborted")) or bool(ev.get("errorMessage"))
-            if not failed:
-                compactions += 1
-                recent.append({"turn": turns, "tool": "compaction",
-                               "text": f"context compacted (#{compactions})"})
-            else:
-                recent.append({"turn": turns, "tool": "compaction",
-                               "text": f"compaction failed: {str(ev.get('errorMessage') or 'aborted')[:80]}"})
-        elif t == "tool_execution_start":
-            name = ev.get("toolName") or "unknown"
-            tool_counts[name] = tool_counts.get(name, 0) + 1
-            tool_calls += 1
-            args = ev.get("args") or {}
-            recent.append({"turn": turns, "tool": name, "text": _summarize(name, args)})
-            if name == "bash":
-                cmd = str(args.get("command") or args.get("cmd") or "")
-                for prog in _bash_programs(cmd):
-                    bash_counts[prog] = bash_counts.get(prog, 0) + 1
-        elif t == "tool_execution_end":
-            res = ev.get("result") or {}
-            is_err = ev.get("isError") or (isinstance(res, dict) and res.get("isError"))
-            if is_err:
-                txt = ""
-                if isinstance(res, dict):
-                    cont = res.get("content")
-                    if isinstance(cont, list) and cont:
-                        txt = str((cont[0] or {}).get("text") or "")
-                txt = txt or str(ev.get("error") or "tool error")
-                tool = ev.get("toolName") or "?"
-                benign = False
-                if tool == "bash":
-                    body = re.sub(r'(?i)command exited with code\s*\d+\.?', '', txt).replace("(no output)", "").strip()
-                    benign = not body
-                if not benign:
-                    errors.append({"turn": turns, "tool": tool, "text": txt[:200]})
-        elif t == "message_end":
-            txt = (ev.get("message") or {}).get("text") or ev.get("text")
-            if txt:
-                recent.append({"turn": turns, "tool": "say", "text": str(txt)[:120]})
-        if len(recent) > 60:
-            recent = recent[-60:]
-        if len(errors) > 50:
-            errors = errors[-50:]
+def _new_pi_agg() -> dict:
+    """Fresh mutable aggregate for the pi.log fold (shared by full + incremental parsers)."""
+    return {"tool_counts": {}, "tool_calls": 0, "bash_counts": {},
+            "turns": 0, "steps": 0, "compactions": 0, "recent": [], "errors": []}
+
+
+def _fold_pi_event(agg: dict, ev: dict) -> None:
+    """Fold one event into the running aggregate, in place. This is the EXACT per-event
+    logic the original parse_pi_log loop ran; extracting it lets the incremental cursor
+    parser reuse it so incremental output == full output, field for field."""
+    t = ev.get("type")
+    if t == "_session_start":
+        agg["errors"].clear()
+    elif t == "agent_start":
+        agg["turns"] += 1
+    elif t == "turn_start":
+        agg["steps"] += 1
+    elif t == "compaction_end":
+        # Count only SUCCESSFUL compactions. pi can fire compaction_start then fail in
+        # compaction_end (aborted, or errorMessage set, e.g. the known "reading 'signal'"
+        # auto-compaction bug); those produce no session entry and must not be counted.
+        failed = bool(ev.get("aborted")) or bool(ev.get("errorMessage"))
+        if not failed:
+            agg["compactions"] += 1
+            agg["recent"].append({"turn": agg["turns"], "tool": "compaction",
+                                  "text": f"context compacted (#{agg['compactions']})"})
+        else:
+            agg["recent"].append({"turn": agg["turns"], "tool": "compaction",
+                                  "text": f"compaction failed: {str(ev.get('errorMessage') or 'aborted')[:80]}"})
+    elif t == "tool_execution_start":
+        name = ev.get("toolName") or "unknown"
+        agg["tool_counts"][name] = agg["tool_counts"].get(name, 0) + 1
+        agg["tool_calls"] += 1
+        args = ev.get("args") or {}
+        agg["recent"].append({"turn": agg["turns"], "tool": name, "text": _summarize(name, args)})
+        if name == "bash":
+            cmd = str(args.get("command") or args.get("cmd") or "")
+            for prog in _bash_programs(cmd):
+                agg["bash_counts"][prog] = agg["bash_counts"].get(prog, 0) + 1
+    elif t == "tool_execution_end":
+        res = ev.get("result") or {}
+        is_err = ev.get("isError") or (isinstance(res, dict) and res.get("isError"))
+        if is_err:
+            txt = ""
+            if isinstance(res, dict):
+                cont = res.get("content")
+                if isinstance(cont, list) and cont:
+                    txt = str((cont[0] or {}).get("text") or "")
+            txt = txt or str(ev.get("error") or "tool error")
+            tool = ev.get("toolName") or "?"
+            benign = False
+            if tool == "bash":
+                body = re.sub(r'(?i)command exited with code\s*\d+\.?', '', txt).replace("(no output)", "").strip()
+                benign = not body
+            if not benign:
+                agg["errors"].append({"turn": agg["turns"], "tool": tool, "text": txt[:200]})
+    elif t == "message_end":
+        txt = (ev.get("message") or {}).get("text") or ev.get("text")
+        if txt:
+            agg["recent"].append({"turn": agg["turns"], "tool": "say", "text": str(txt)[:120]})
+    if len(agg["recent"]) > 60:
+        del agg["recent"][:-60]
+    if len(agg["errors"]) > 50:
+        del agg["errors"][:-50]
+
+
+def _finalize_pi(agg: dict) -> dict:
+    """Render the public /stats shape from an aggregate (sorted distributions; list copies
+    so the persisted incremental aggregate is never aliased into a response body)."""
     return {
-        "tool_calls": tool_calls,
-        "tool_distribution": dict(sorted(tool_counts.items(), key=lambda kv: -kv[1])),
-        "turns": turns, "steps": steps, "compactions": compactions,
-        "recent": recent, "errors": errors,
-        "bash_distribution": dict(sorted(bash_counts.items(), key=lambda kv: -kv[1])),
+        "tool_calls": agg["tool_calls"],
+        "tool_distribution": dict(sorted(agg["tool_counts"].items(), key=lambda kv: -kv[1])),
+        "turns": agg["turns"], "steps": agg["steps"], "compactions": agg["compactions"],
+        "recent": list(agg["recent"]), "errors": list(agg["errors"]),
+        "bash_distribution": dict(sorted(agg["bash_counts"].items(), key=lambda kv: -kv[1])),
     }
+
+
+def parse_pi_log(log_path: Path) -> dict:
+    """Full parse: fold every event in the (tail-capped) log. Stateless ground truth."""
+    agg = _new_pi_agg()
+    for ev in _iter_events(log_path):
+        _fold_pi_event(agg, ev)
+    return _finalize_pi(agg)
+
+
+# --- incremental byte-cursor parsing (R03a) ----------------------------------
+# STATS_INCREMENTAL=1 (default) makes job_stats fold only NEW bytes per poll instead of
+# re-reading the whole pi.log / session JSONL. Per-path {offset, agg} cache; output is
+# byte-for-byte identical to the full parser (FSV gate). STATS_INCREMENTAL=0 rolls back.
+STATS_INCREMENTAL = os.environ.get("STATS_INCREMENTAL", "1") != "0"
+_pi_cursor: dict = {}     # str(log_path) -> {"offset": int, "agg": dict}
+_usage_cursor: dict = {}  # str(session_file) -> {"offset": int, "sums": dict, "last_ctx": int}
+
+
+def _read_new_complete(path: Path, offset: int):
+    """Read bytes [offset, EOF) but only up to the last complete line ('\\n'-terminated).
+    Returns (consumed_bytes, new_offset). A partial trailing line is left for next poll."""
+    with open(path, "rb") as f:
+        f.seek(offset)
+        data = f.read()
+    nl = data.rfind(b"\n")
+    if nl < 0:
+        return b"", offset            # no complete new line yet
+    return data[:nl + 1], offset + nl + 1
+
+
+def parse_pi_log_incremental(log_path: Path) -> dict:
+    """Incremental equivalent of parse_pi_log: folds only newly-appended complete lines."""
+    if not log_path.exists():
+        return _finalize_pi(_new_pi_agg())
+    key = str(log_path)
+    size = log_path.stat().st_size
+    ent = _pi_cursor.get(key)
+    # First sight OR rotation/truncation (file shrank below our cursor) -> rebuild from the
+    # same start the full parser would use (0, or the 24 MB tail-cap boundary).
+    if ent is None or size < ent["offset"]:
+        ent = {"offset": _tailcap_start(log_path, size), "agg": _new_pi_agg()}
+        _pi_cursor[key] = ent
+    consumed, ent["offset"] = _read_new_complete(log_path, ent["offset"])
+    for raw in consumed.splitlines(keepends=True):
+        ev = _event_from_line(raw)
+        if ev is not None:
+            _fold_pi_event(ent["agg"], ev)
+    return _finalize_pi(ent["agg"])
+
+
+def session_usage_incremental(job_dir: Path) -> dict:
+    """Incremental equivalent of session_usage: sum only newly-appended assistant-usage lines.
+    Token sums are monotonic folds; context_tokens is the last assistant input+cacheRead seen."""
+    empty = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "total": 0, "context_tokens": 0}
+    sf = _session_file(job_dir)
+    if not sf or not sf.exists():
+        return dict(empty)
+    key = str(sf)
+    size = sf.stat().st_size
+    ent = _usage_cursor.get(key)
+    if ent is None or size < ent["offset"]:
+        ent = {"offset": 0, "sums": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+               "last_ctx": 0}
+        _usage_cursor[key] = ent
+    consumed, ent["offset"] = _read_new_complete(sf, ent["offset"])
+    for raw in consumed.splitlines(keepends=True):
+        if b'"usage"' not in raw:
+            continue
+        try:
+            o = json.loads(raw.decode("utf-8", "ignore"))
+        except Exception:
+            continue
+        msg = o.get("message") if isinstance(o, dict) else None
+        if not (isinstance(msg, dict) and msg.get("role") == "assistant"):
+            continue
+        u = msg.get("usage")
+        if isinstance(u, dict):
+            for k in ent["sums"]:
+                ent["sums"][k] += int(u.get(k) or 0)
+            ent["last_ctx"] = int(u.get("input") or 0) + int(u.get("cacheRead") or 0)
+    out = dict(ent["sums"])
+    out["total"] = out["input"] + out["output"] + out["cacheRead"] + out["cacheWrite"]
+    out["context_tokens"] = ent["last_ctx"]
+    return out
 
 
 def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
@@ -298,8 +415,12 @@ def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
     dataroom = work / "dataroom"
     tree, size = _walk_tree(work)
     tree["name"] = "output"
-    log = parse_pi_log(job_dir / "pi.log")
-    usage = session_usage(job_dir)
+    if STATS_INCREMENTAL:
+        log = parse_pi_log_incremental(job_dir / "pi.log")
+        usage = session_usage_incremental(job_dir)
+    else:
+        log = parse_pi_log(job_dir / "pi.log")
+        usage = session_usage(job_dir)
     tokens_spent = usage.get(BUDGET_METRIC, 0)
     turns_done = log.get("turns", 0)         # the BUDGET is now measured in turns
     ctx_window = int(os.environ.get("CONTEXT_WINDOW", os.environ.get("CTX_SIZE", "131072")))
