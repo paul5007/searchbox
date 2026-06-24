@@ -22,6 +22,7 @@ Endpoints (POST JSON):
 """
 import os, json, glob, hashlib, time
 import numpy as np
+import anyio
 from fastapi import FastAPI, Request
 import urllib.request
 import uvicorn
@@ -367,16 +368,7 @@ def _build_scope(files: list, size: int, overlap: int):
 
 
 # --- endpoints ---------------------------------------------------------------
-@app.post("/search")
-async def search(req: Request):
-    """On-the-fly semantic search. Embeds the requested scope at call time (no boot index).
-
-    body: {query, k=8, paths?[], chunk_size?, chunk_overlap?}
-      - paths omitted  -> search the whole dataroom (model chose to search everything)
-      - paths given    -> only those files (model scoped it down to a part)
-      - chunk_size/overlap -> model controls granularity (defaults otherwise)
-    """
-    body = await req.json()
+def _search_impl(body):
     q = body.get("query", "")
     if not q:
         return {"results": [], "scope_chunks": 0}
@@ -413,13 +405,22 @@ async def search(req: Request):
     return {"results": results, "scope_chunks": int(embs.shape[0]), "scope_files": len(files)}
 
 
-@app.post("/answer")
-async def answer(req: Request):
-    """High-level two-stage QA retrieval: dense-retrieve a WIDE candidate set from the
-    dataroom (embedding search), then cross-encoder RERANK to keep the few best supporting
-    passages. Backs the answer_question tool. body: {query|question, k=5, paths?, fetch_k?}.
-    Returns {results:[{path,chunk,score,text}]} reranked, plus scope stats."""
+@app.post("/search")
+async def search(req: Request):
+    """On-the-fly semantic search. Embeds the requested scope at call time (no boot index).
+
+    body: {query, k=8, paths?[], chunk_size?, chunk_overlap?}
+      - paths omitted  -> search the whole dataroom (model chose to search everything)
+      - paths given    -> only those files (model scoped it down to a part)
+      - chunk_size/overlap -> model controls granularity (defaults otherwise)
+
+    Sync compute runs in Starlette's threadpool (R04) so a long embed never stalls the loop.
+    """
     body = await req.json()
+    return await anyio.to_thread.run_sync(_search_impl, body)
+
+
+def _answer_impl(body):
     q = body.get("query") or body.get("question") or ""
     if not q:
         return {"results": [], "scope_chunks": 0}
@@ -453,19 +454,17 @@ async def answer(req: Request):
     return {"results": results, "scope_chunks": int(embs.shape[0]), "scope_files": len(files)}
 
 
-@app.post("/embed")
-async def embed(req: Request):
-    """Atomic embedding primitive: embed caller-supplied texts and APPEND the vectors to a jsonl
-    file in the model's working directory. Returns only metadata (path, count, dim) - NOT the
-    vectors themselves, which would blow up the context. The model reads the jsonl back with its
-    own tools (cat/python) and decides how to use the embeddings (similarity, clustering, etc).
-
-    body: {texts: [str], role?: "query"|"passage" (default passage), out?: filename}
-    Each jsonl line: {"i": <index in this call>, "text": <input text>, "role": <role>,
-                      "dim": <D>, "embedding": [floats]}  (L2-normalized, so dot == cosine)
-    return: {path, relpath, count, dim, role, appended} or {error}
-    """
+@app.post("/answer")
+async def answer(req: Request):
+    """High-level two-stage QA retrieval: dense-retrieve a WIDE candidate set from the
+    dataroom (embedding search), then cross-encoder RERANK to keep the few best supporting
+    passages. Backs the answer_question tool. body: {query|question, k=5, paths?, fetch_k?}.
+    Returns {results:[{path,chunk,score,text}]} reranked, plus scope stats."""
     body = await req.json()
+    return await anyio.to_thread.run_sync(_answer_impl, body)
+
+
+def _embed_impl(body):
     texts = body.get("texts")
     if isinstance(texts, str):
         texts = [texts]
@@ -496,6 +495,22 @@ async def embed(req: Request):
             "appended": appended}
 
 
+@app.post("/embed")
+async def embed(req: Request):
+    """Atomic embedding primitive: embed caller-supplied texts and APPEND the vectors to a jsonl
+    file in the model's working directory. Returns only metadata (path, count, dim) - NOT the
+    vectors themselves, which would blow up the context. The model reads the jsonl back with its
+    own tools (cat/python) and decides how to use the embeddings (similarity, clustering, etc).
+
+    body: {texts: [str], role?: "query"|"passage" (default passage), out?: filename}
+    Each jsonl line: {"i": <index in this call>, "text": <input text>, "role": <role>,
+                      "dim": <D>, "embedding": [floats]}  (L2-normalized, so dot == cosine)
+    return: {path, relpath, count, dim, role, appended} or {error}
+    """
+    body = await req.json()
+    return await anyio.to_thread.run_sync(_embed_impl, body)
+
+
 def _rerank_texts(q: str, docs: list, top_n=None) -> list:
     """Cross-encoder rerank helper -> [{index,score,text}] sorted desc. index is into docs."""
     docs = list(docs)
@@ -517,14 +532,7 @@ def _rerank_texts(q: str, docs: list, top_n=None) -> list:
              "text": r.get("document", ""), "index": int(r.get("index", -1))} for r in ranked]
 
 
-@app.post("/rerank")
-async def rerank(req: Request):
-    """Pure cross-encoder rerank with jina-reranker-v3: score caller-supplied documents.
-
-    Deliberately does NOT fetch its own candidates (no hidden embedding search). The tool stays
-    a single-model primitive (basic reranker usage) - the model itself decides what to feed it.
-    """
-    body = await req.json()
+def _rerank_impl(body):
     q = body.get("query", "")
     docs = body.get("documents")
     top_n = body.get("top_n")
@@ -549,6 +557,17 @@ async def rerank(req: Request):
     return {"results": out}
 
 
+@app.post("/rerank")
+async def rerank(req: Request):
+    """Pure cross-encoder rerank with jina-reranker-v3: score caller-supplied documents.
+
+    Deliberately does NOT fetch its own candidates (no hidden embedding search). The tool stays
+    a single-model primitive (basic reranker usage) - the model itself decides what to feed it.
+    """
+    body = await req.json()
+    return await anyio.to_thread.run_sync(_rerank_impl, body)
+
+
 # --- derived compute endpoints (all reduce to _encode / rerank; numpy on the server) ---------
 # These back the many tool "shapes" the agent can pick from. Every one is just embedding or
 # reranking under the hood - different I/O ergonomics, same two models.
@@ -561,10 +580,7 @@ def _embed_norm(texts, role: str) -> np.ndarray:
     return e / n
 
 
-@app.post("/similarity")
-async def similarity(req: Request):
-    """Cosine similarity. Either pairwise (a,b same length) or matrix (queries x documents)."""
-    body = await req.json()
+def _similarity_impl(body):
     a = body.get("a") or body.get("queries") or []
     b = body.get("b") or body.get("documents") or []
     if not a or not b:
@@ -579,10 +595,14 @@ async def similarity(req: Request):
     return {"mode": "matrix", "matrix": mat}
 
 
-@app.post("/classify")
-async def classify(req: Request):
-    """Zero-shot classification via embeddings: assign each text its nearest label."""
+@app.post("/similarity")
+async def similarity(req: Request):
+    """Cosine similarity. Either pairwise (a,b same length) or matrix (queries x documents)."""
     body = await req.json()
+    return await anyio.to_thread.run_sync(_similarity_impl, body)
+
+
+def _classify_impl(body):
     texts = body.get("texts") or []
     labels = body.get("labels") or []
     if not texts or not labels:
@@ -595,6 +615,13 @@ async def classify(req: Request):
         j = int(np.argmax(sims[i]))
         out.append({"text": t, "label": labels[j], "score": round(float(sims[i][j]), 4)})
     return {"results": out}
+
+
+@app.post("/classify")
+async def classify(req: Request):
+    """Zero-shot classification via embeddings: assign each text its nearest label."""
+    body = await req.json()
+    return await anyio.to_thread.run_sync(_classify_impl, body)
 
 
 def _greedy_diverse(embs: np.ndarray, k: int) -> list:
@@ -612,10 +639,7 @@ def _greedy_diverse(embs: np.ndarray, k: int) -> list:
     return chosen
 
 
-@app.post("/deduplicate")
-async def deduplicate(req: Request):
-    """Top-k semantically diverse subset of strings (submodular/greedy over embeddings)."""
-    body = await req.json()
+def _deduplicate_impl(body):
     strings = body.get("strings") or body.get("texts") or []
     if not strings:
         return {"error": "need strings"}
@@ -625,10 +649,14 @@ async def deduplicate(req: Request):
     return {"kept_indices": idx, "kept": [strings[i] for i in idx]}
 
 
-@app.post("/cluster")
-async def cluster(req: Request):
-    """Greedy threshold clustering over embeddings (no sklearn): group near-duplicate texts."""
+@app.post("/deduplicate")
+async def deduplicate(req: Request):
+    """Top-k semantically diverse subset of strings (submodular/greedy over embeddings)."""
     body = await req.json()
+    return await anyio.to_thread.run_sync(_deduplicate_impl, body)
+
+
+def _cluster_impl(body):
     texts = body.get("texts") or []
     if not texts:
         return {"error": "need texts"}
@@ -651,6 +679,13 @@ async def cluster(req: Request):
     return {"n_clusters": len(clusters),
             "clusters": [{"id": c, "members": m, "texts": [texts[x] for x in m]}
                         for c, m in enumerate(clusters)]}
+
+
+@app.post("/cluster")
+async def cluster(req: Request):
+    """Greedy threshold clustering over embeddings (no sklearn): group near-duplicate texts."""
+    body = await req.json()
+    return await anyio.to_thread.run_sync(_cluster_impl, body)
 
 
 @app.post("/stats")
