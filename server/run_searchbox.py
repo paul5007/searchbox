@@ -227,8 +227,16 @@ def count_tool_calls(log_path: Path) -> int:
 
 
 def answer_present(work_dir: Path) -> bool:
+    """An answer exists iff ANSWER.md is present with non-whitespace content. (Previously gated on
+    size > 200 bytes, which marked short-but-correct answers absent — e.g. a 67-byte 'The battery
+    life of the Atlas-7 is 8 hours' made run_meta report done=false. See #38.)"""
     a = work_dir / "ANSWER.md"
-    return a.exists() and a.stat().st_size > 200
+    if not a.exists():
+        return False
+    try:
+        return bool(a.read_text(errors="ignore").strip())
+    except Exception:
+        return False
 
 
 # The task instruction lives in the SYSTEM PROMPT (appended via --append-system-prompt), not in
