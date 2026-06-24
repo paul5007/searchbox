@@ -11,10 +11,10 @@ GET  /jobs/{id}/dashboard          -> the dashboard HTML
 GET  /                             -> submit page
 GET  /health
 """
-import json, os, signal, subprocess, sys, threading, time, uuid
+import hashlib, json, os, signal, subprocess, sys, threading, time, uuid
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse, JSONResponse, Response
 import uvicorn
 
 from server.stats import job_stats, session_usage, parse_pi_log, BUDGET_METRIC
@@ -496,20 +496,55 @@ def status(job_id: str):
     return j
 
 
+# ETag/304 for /stats (R03d). The dashboard polls every 3s; for a finished/paused/idle job
+# nothing on disk changes between polls, so a cheap ETag lets us answer 304 (no body build,
+# no serialization) instead of re-running job_stats. For a RUNNING job pi.log grows every poll
+# so the ETag changes and the full body (incl. live tps) is served — exactly when it should be.
+# STATS_ETAG=0 disables the 304 short-circuit (rollback).
+STATS_ETAG = os.environ.get("STATS_ETAG", "1") != "0"
+
+
+def _stats_etag(job_id: str, job_dir: Path, status: str) -> str:
+    """Strong ETag from cheap stat() signatures of everything that can change the /stats body:
+    pi.log, session JSONL, run_meta.json, ANSWER.md, the control flag, the work-dir mtime, and
+    the job status. No file is read or parsed."""
+    parts = [status or ""]
+    targets = [job_dir / "pi.log", job_dir / "run_meta.json", job_dir / "control",
+               job_dir / "work" / "ANSWER.md", job_dir / "work"]
+    sf = _session_file(job_id)
+    if sf is not None:
+        targets.append(sf)
+    for p in targets:
+        try:
+            st = p.stat()
+            parts.append(f"{p.name}:{st.st_size}:{st.st_mtime_ns}")
+        except OSError:
+            parts.append(f"{p.name}:-")
+    return '"' + hashlib.blake2b("|".join(parts).encode(), digest_size=12).hexdigest() + '"'
+
+
 @app.get("/jobs/{job_id}/stats")
-def stats_ep(job_id: str):
+def stats_ep(job_id: str, request: Request):
     job_dir = JOBS / job_id
     if not job_dir.exists():
         raise HTTPException(404, "unknown job")
     with _lock:
         meta = dict(_jobs.get(job_id, {})) or _load_meta(job_id)
-    s = job_stats(job_dir, meta.get("budget"), live=(meta.get("status") == "running"))
+    status = meta.get("status") or "unknown"
+    etag = _stats_etag(job_id, job_dir, status) if STATS_ETAG else None
+    if etag is not None:
+        inm = request.headers.get("if-none-match", "")
+        if etag in [t.strip() for t in inm.split(",") if t.strip()]:
+            # Nothing changed since the client's cached copy — skip the parse + serialization.
+            return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+    s = job_stats(job_dir, meta.get("budget"), live=(status == "running"))
     s["job_id"] = job_id
-    s["job_status"] = meta.get("status") or "unknown"
+    s["job_status"] = status
     s["query"] = meta.get("query", "")
     s["model_id"] = meta.get("MODEL_ID") or os.environ.get("MODEL_ID", "qwen3.6")
     s["tools_enabled"] = meta.get("SEARCHBOX_TOOLS") or os.environ.get("SEARCHBOX_TOOLS", "all")
-    return s
+    headers = {"ETag": etag, "Cache-Control": "no-cache"} if etag is not None else None
+    return JSONResponse(s, headers=headers)
 
 
 @app.get("/jobs/{job_id}/answer")

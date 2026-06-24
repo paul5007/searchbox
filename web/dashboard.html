@@ -280,10 +280,14 @@ function setStatus(s,done){
   else el.innerHTML='<span class="dot"></span>'+(s||"queued");
 }
 
+let lastEtag=null;        // ETag of the last 200 body (R03d conditional polling)
 async function tick(){
   try{
-    const r=await fetch(BASE+`/jobs/${JOB}/stats`,{cache:"no-store"});
+    const hdrs=lastEtag?{"If-None-Match":lastEtag}:{};
+    const r=await fetch(BASE+`/jobs/${JOB}/stats`,{cache:"no-store",headers:hdrs});
+    if(r.status===304){lastOk=Date.now();return;}   // unchanged since last poll — nothing to redraw
     if(!r.ok)throw 0;
+    lastEtag=r.headers.get("ETag")||lastEtag;
     const d=await r.json();lastOk=Date.now();
     const live=d.job_status==="running";
     $("q").textContent=d.query||"—";
