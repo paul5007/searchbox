@@ -51,12 +51,16 @@ Jina cloud API** (`EMBED_BACKEND` / `RERANK_BACKEND` = `local` | `api`):
 
 | Role | Default | Other built-in options | Knob |
 | --- | --- | --- | --- |
-| Agent LLM | `qwen3.6` (any OpenAI-compatible server via `LLAMA_URL`) | any chat model you point `LLAMA_URL` + `MODEL_ID` at | `LLAMA_URL`, `MODEL_ID`, `CONTEXT_WINDOW` |
-| Embedder | `jina-embeddings-v5-text-small` | `jina-embeddings-v5-text-nano` (lighter) | `EMBED_MODEL`, `API_EMBED_MODEL` |
-| Reranker | `jina-reranker-v3` | `jina-reranker-v2-base-multilingual` | `RERANK_MODEL`, `API_RERANK_MODEL` |
+| Agent LLM | [`Qwen3.6-35B-A3B`](https://huggingface.co/Qwen/Qwen3.6-35B-A3B), served as the [`unsloth/Qwen3.6-35B-A3B-GGUF`](https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF) `UD-Q4_K_XL` quant | any chat model you point `LLAMA_URL` + `MODEL_ID` at | `LLAMA_URL`, `MODEL_ID`, `CONTEXT_WINDOW` |
+| Embedder | [`jina-embeddings-v5-text-small`](https://huggingface.co/jinaai/jina-embeddings-v5-text-small) | [`jina-embeddings-v5-text-nano`](https://huggingface.co/jinaai/jina-embeddings-v5-text-nano) (lighter) | `EMBED_MODEL`, `API_EMBED_MODEL` |
+| Reranker | [`jina-reranker-v3`](https://huggingface.co/jinaai/jina-reranker-v3) | [`jina-reranker-v2-base-multilingual`](https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual) | `RERANK_MODEL`, `API_RERANK_MODEL` |
 
-- **Agent LLM** runs on your own OpenAI-compatible endpoint (e.g. a local llama.cpp / vLLM serving
-  `qwen3.6`). It is the thing under test - it reads the dataroom and writes the answer.
+- **Agent LLM** is the thing under test - it reads the dataroom and writes the answer. Our
+  reference deployment runs `Qwen3.6-35B-A3B` (a Mixture-of-Experts model, 35B total parameters /
+  ~3B active per token) as the unsloth `UD-Q4_K_XL` GGUF quant on `llama.cpp`, with **MTP
+  speculative decoding** (`--spec-type draft-mtp`) for faster generation, 128K context, FlashAttn,
+  and q8_0 KV cache. It is served over any OpenAI-compatible endpoint via `LLAMA_URL` /
+  `MODEL_ID`, so you can swap in any chat model.
 - **Embedder + reranker** power retrieval. Local loading supports both reranker families: v3
   (`AutoModel`) and v2-base-multilingual (`AutoModelForSequenceClassification`); the loader picks
   whichever class exposes `.rerank()`.
