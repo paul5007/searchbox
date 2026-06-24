@@ -101,6 +101,26 @@ def wait_http(url: str, timeout: int = 600) -> bool:
     return False
 
 
+def wait_ready(base_url: str, timeout: int) -> bool:
+    """Poll the sidecar /ready endpoint (R05b) until models are warm (200). 503 = still warming,
+    keep polling. Returns False on timeout so the caller can proceed COLD (models lazy-load on
+    first use) rather than hang past DATAROOM_BOOT_TIMEOUT."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"{base_url}/ready", timeout=3) as r:
+                if getattr(r, "status", 200) == 200:
+                    return True
+            time.sleep(1)
+        except urllib.error.HTTPError as e:
+            if e.code == 200:
+                return True
+            time.sleep(1)            # 503 -> still warming
+        except Exception:
+            time.sleep(1)            # not up yet / transient
+    return False
+
+
 def _strip_single_wrapper(dataroom_dir: Path):
     """If everything sits under one top-level folder (the common zip wrapper, e.g. a GitHub
     `repo-main/` or a hand-made `dataroom/`), hoist its contents up one level so the dataroom root
@@ -546,7 +566,8 @@ def main():
     os.environ["DATAROOM_INDEX_URL"] = f"http://127.0.0.1:{port}"
     write_pi_config(agent_dir, llama_url)
     cs = boot_dataroom(job_dir, dataroom_dir, port)
-    if not wait_http(f"http://127.0.0.1:{port}/stats", int(os.environ.get("DATAROOM_BOOT_TIMEOUT", "600"))):
+    boot_timeout = int(os.environ.get("DATAROOM_BOOT_TIMEOUT", "600"))
+    if not wait_http(f"http://127.0.0.1:{port}/stats", boot_timeout):
         print("ERROR: dataroom sidecar did not come up", file=sys.stderr)
         try:
             os.killpg(os.getpgid(cs.pid), signal.SIGTERM)
@@ -554,6 +575,11 @@ def main():
             cs.terminate()
         write_run_meta(job_dir, stop_reason="error_dataroom_boot", turns=0, done=False)
         sys.exit(3)
+    # Sidecar is up; now wait for models to WARM (R05b) so the first agent turn doesn't pay the
+    # load. Capped at the same boot timeout — if warm is slow, proceed cold (lazy load) not hang.
+    if not wait_ready(f"http://127.0.0.1:{port}", boot_timeout):
+        print("[searchbox] sidecar not warm before boot timeout; proceeding (models lazy-load)",
+              file=sys.stderr)
 
     start = time.time()
     turn, stop_reason, usage = 0, "error_pi_exited", {}

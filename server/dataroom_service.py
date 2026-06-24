@@ -24,6 +24,7 @@ import os, json, glob, hashlib, time, threading
 import numpy as np
 import anyio
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 import urllib.request
 import uvicorn
 
@@ -711,6 +712,16 @@ async def stats(_: Request):
             "embed_model": API_EMBED_MODEL if EMBED_BACKEND == "api" else EMBED_MODEL,
             "rerank_model": API_RERANK_MODEL if RERANK_BACKEND == "api" else RERANK_MODEL,
             "dataroom_dir": DATAROOM_DIR}
+
+
+@app.get("/ready")
+async def ready():
+    """Readiness probe (R05b): 200 once the boot warm thread has finished (or was skipped with
+    WARMUP=0), 503 while models are still warming. run_searchbox waits on this so the first
+    agent turn doesn't pay the model load; the wait is capped so a slow warm can't hang boot."""
+    body = {"ready": _ready["done"], "embed": _ready["embed"],
+            "rerank": _ready["rerank"], "error": _ready["error"], "warmup": WARMUP}
+    return JSONResponse(body, status_code=200 if _ready["done"] else 503)
 
 
 # --- boot warmup (R05) -------------------------------------------------------
