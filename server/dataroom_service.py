@@ -733,27 +733,71 @@ WARMUP = os.environ.get("WARMUP", "1") != "0"
 _ready = {"done": False, "embed": False, "rerank": False, "error": None}
 
 
+# Which model each catalog op needs. answer_question is two-stage (dense retrieve -> rerank), so
+# it needs BOTH. The rest are embedder-only except the pure reranker op.
+_EMBED_OPS = {"search", "answer", "embed", "similarity", "classify", "cluster", "deduplicate"}
+_RERANK_OPS = {"answer", "rerank"}
+
+
+def _catalog_ops() -> dict:
+    """tool name -> op, from pi/tools-catalog.json (single source of truth). Empty on any error."""
+    try:
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "pi", "tools-catalog.json")
+        cat = json.load(open(path))
+        return {t["name"]: t.get("op") for t in cat.get("tools", []) if t.get("name")}
+    except Exception:
+        return {}
+
+
+def _tools_needed():
+    """(want_embed, want_rerank) implied by SEARCHBOX_TOOLS (R05c). Unset -> both (default set);
+    "" -> neither (no external tools); otherwise per tool op, with substring fallbacks so an
+    alias the catalog doesn't list (e.g. dataroom_rerank) still warms the right model."""
+    raw = os.environ.get("SEARCHBOX_TOOLS")
+    if raw is None:
+        return True, True
+    names = [t.strip() for t in raw.split(",") if t.strip()]
+    if not names:
+        return False, False
+    ops = _catalog_ops()
+    want_embed = want_rerank = False
+    for n in names:
+        op = ops.get(n)
+        if op in _RERANK_OPS or "rerank" in n or "answer" in n:
+            want_rerank = True
+        if op in _EMBED_OPS or any(k in n for k in
+                                   ("search", "embed", "similar", "classif", "cluster", "dedup", "diverse", "answer")):
+            want_embed = True
+    return want_embed, want_rerank
+
+
 def _warmup():
-    """Load + exercise both models once. Errors are logged, not fatal: the sidecar stays up and
-    lazy-loads on first use, so a warm failure degrades to the pre-warmup behavior."""
+    """Load + exercise only the models implied by SEARCHBOX_TOOLS (R05c). Errors are logged, not
+    fatal: the sidecar stays up and lazy-loads on first use, so a warm failure degrades to the
+    pre-warmup behavior."""
     t0 = time.time()
-    try:
-        embed_model()
-        _encode(["warmup"], "passage")
-        _ready["embed"] = True
-    except Exception as e:
-        _ready["error"] = f"embed: {str(e)[:200]}"
-        print(f"[dataroom] embed warmup failed: {e}", flush=True)
-    try:
-        rerank_model()
-        _rerank_texts("warmup query", ["warmup document"], top_n=1)
-        _ready["rerank"] = True
-    except Exception as e:
-        _ready["error"] = (f"{_ready['error']}; " if _ready["error"] else "") + f"rerank: {str(e)[:200]}"
-        print(f"[dataroom] rerank warmup failed: {e}", flush=True)
+    want_embed, want_rerank = _tools_needed()
+    if want_embed:
+        try:
+            embed_model()
+            _encode(["warmup"], "passage")
+            _ready["embed"] = True
+        except Exception as e:
+            _ready["error"] = f"embed: {str(e)[:200]}"
+            print(f"[dataroom] embed warmup failed: {e}", flush=True)
+    if want_rerank:
+        try:
+            rerank_model()
+            _rerank_texts("warmup query", ["warmup document"], top_n=1)
+            _ready["rerank"] = True
+        except Exception as e:
+            _ready["error"] = (f"{_ready['error']}; " if _ready["error"] else "") + f"rerank: {str(e)[:200]}"
+            print(f"[dataroom] rerank warmup failed: {e}", flush=True)
     _ready["done"] = True
     print(f"[dataroom] warmup done in {time.time()-t0:.1f}s "
-          f"(embed={_ready['embed']} rerank={_ready['rerank']})", flush=True)
+          f"(want_embed={want_embed} want_rerank={want_rerank} "
+          f"embed={_ready['embed']} rerank={_ready['rerank']})", flush=True)
 
 
 def _start_warmup():
