@@ -623,25 +623,64 @@ def trace_jsonl(job_id: str):
     return FileResponse(str(sf), media_type="application/x-ndjson", filename=f"trace-{job_id}.jsonl")
 
 
+# Cache for the pi --export subprocess (R15). Keyed per job on the session JSONL's (mtime,size):
+# re-exporting an unchanged (usually finished) trace on every click is wasteful. TRACE_CACHE=0
+# always re-exports (rollback). A per-job lock makes concurrent first-views export exactly once.
+TRACE_CACHE = os.environ.get("TRACE_CACHE", "1") != "0"
+_trace_cache: dict = {}                 # job_id -> {"sig": (mtime_ns, size)}
+_trace_locks: dict = {}
+_trace_locks_guard = threading.Lock()
+
+
+def _trace_lock_for(job_id: str) -> threading.Lock:
+    with _trace_locks_guard:
+        lk = _trace_locks.get(job_id)
+        if lk is None:
+            lk = _trace_locks[job_id] = threading.Lock()
+        return lk
+
+
+def _run_pi_export(sf: Path, out: Path):
+    pi_bin = os.environ.get("PI_BIN", "pi")
+    env = dict(os.environ); env["PI_SKIP_VERSION_CHECK"] = "1"
+    subprocess.run([pi_bin, "--export", str(sf), str(out)],
+                   env=env, capture_output=True, timeout=120, check=True)
+
+
 @app.get("/jobs/{job_id}/trace.html")
-def trace_html(job_id: str):
-    """Rendered trace incl. thinking, via Pi's NATIVE `pi --export` (no custom renderer)."""
+def trace_html(job_id: str, request: Request):
+    """Rendered trace incl. thinking, via Pi's NATIVE `pi --export` (no custom renderer).
+
+    The export subprocess is cached on the session file's (mtime,size): a repeat view of an
+    unchanged session serves the existing HTML (no subprocess); a grown/continued session
+    re-exports. ETag lets the browser 304 too."""
     sf = _session_file(job_id)
     if not sf:
         raise HTTPException(404, "no trace yet")
     out = JOBS / job_id / "trace.html"
-    pi_bin = os.environ.get("PI_BIN", "pi")
-    env = dict(os.environ); env["PI_SKIP_VERSION_CHECK"] = "1"
+    st = sf.stat()
+    sig = (st.st_mtime_ns, st.st_size)
+    etag = '"trace-' + hashlib.blake2b(f"{sig[0]}-{sig[1]}".encode(), digest_size=10).hexdigest() + '"'
+    if TRACE_CACHE and etag in [t.strip() for t in request.headers.get("if-none-match", "").split(",") if t.strip()]:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
     try:
-        subprocess.run([pi_bin, "--export", str(sf), str(out)],
-                       env=env, capture_output=True, timeout=120, check=True)
+        if TRACE_CACHE:
+            lk = _trace_lock_for(job_id)
+            with lk:
+                ent = _trace_cache.get(job_id)
+                if not (ent and ent["sig"] == sig and out.exists()):
+                    _run_pi_export(sf, out)
+                    _trace_cache[job_id] = {"sig": sig}
+        else:
+            _run_pi_export(sf, out)
     except Exception as e:
         raise HTTPException(500, f"pi --export failed: {e}")
-    # No filename= -> Content-Disposition: inline, so the browser opens it in a new tab
-    # instead of downloading it. no-store so each click shows the freshly re-exported trace
-    # (we regenerate it above on every request), never a stale browser-cached copy.
-    return FileResponse(str(out), media_type="text/html",
-                        headers={"Cache-Control": "no-store, must-revalidate"})
+    # No filename= -> Content-Disposition: inline (browser opens in a new tab). ETag + no-cache
+    # lets the browser revalidate and 304 when the session is unchanged.
+    headers = {"Cache-Control": "no-cache"}
+    if TRACE_CACHE:
+        headers["ETag"] = etag
+    return FileResponse(str(out), media_type="text/html", headers=headers)
 
 
 _IMG = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
