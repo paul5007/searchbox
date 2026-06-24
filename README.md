@@ -1,6 +1,6 @@
 # Searchbox
 
-Given a **prompt**, [a **`.zip`** dataroom](https://github.com/hanxiao/dataroom), and a **token budget**. A self-hosted `Qwen3.6-35B-A3B` in a
+Given a query, [a `.zip` dataroom](https://github.com/hanxiao/dataroom), and a token budget. A self-hosted `Qwen3.6-35B-A3B` in a
 minimal [Pi](https://pi.dev) harness explores the dataroom with local tools such as bash, grep, dense retrievers in an **airgapped** loop, then answers.
 
 ![Searchbox](docs/img/banner.png)
