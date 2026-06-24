@@ -51,3 +51,67 @@ No crash — this is the documented degraded state.
 - A bare `/health` returning `{"status":"ok"}` does **not** prove this is llama-server — a stub
   or unrelated server can answer `/health`. Confirm `/props` returns real `n_ctx`/`model_path`
   and `/v1/models` lists the GGUF.
+
+## Benchmark / eval environment (#2)
+
+One job = `server.run_searchbox` boots its own dataroom sidecar (jina models, lazy-embed), drives
+`pi` against the running llama-server, and writes artifacts to `--out`. The sidecar picks a free
+port per run (`free_port()`), so concurrent runs do not collide.
+
+Required env (local backend, no network):
+
+```bash
+export LLAMA_URL=http://127.0.0.1:8089       # the llama-server above
+export EMBED_BACKEND=local                    # jina models from local cache, no download
+export CONTEXT_WINDOW=4096                     # match llama-server -c
+export PI_BIN=$(command -v pi)                 # pi CLI on PATH
+# tools the agent may call (subset of pi/tools-catalog.json); fewer tools = fewer models warmed
+export SEARCHBOX_TOOLS=search_dataroom,answer_question
+```
+
+### Single smoke run
+
+```bash
+.venv/bin/python -m server.run_searchbox \
+  --query "What is the battery life of the Atlas-7?" \
+  --dataroom data/default-dataroom.zip --budget 1 --out ./out/smoke
+```
+
+Source of truth = the artifacts, not stdout:
+
+```bash
+cat out/smoke/run_meta.json   # done=true, answer_present=true, tokens.output>0
+cat out/smoke/timing.json     # llm_ms>0, by_tool_ms populated
+cat out/smoke/work/ANSWER.md   # the model's grounded answer
+```
+
+`done=true` requires a natural stop AND a non-empty ANSWER.md AND `tokens.output>0` (a real
+answer costs output tokens — see #38/#39). A run whose LLM is unreachable reports `done=false`
+with no ANSWER.md, and ends in seconds (it does not hang to `--max-seconds`).
+
+### Ablation matrix
+
+```bash
+.venv/bin/python -m scripts.ablate \
+  --query "What error code did incident INC-2041 report?" \
+  --dataroom data/default-dataroom.zip --budget 1 \
+  --matrix config/ablations.example.json --out runs/exp1
+```
+
+`runs/exp1/results.jsonl` has one summary row per config; each config also gets its own
+`runs/exp1/<name>/{run_meta.json,timing.json}`. The matrix is a JSON list of `{name, env:{...}}`
+where `env` is per-config ENV overrides applied to a single `run_searchbox` invocation.
+
+### Default dataroom
+
+`data/default-dataroom.zip` is the frozen Meridian Robotics corpus (the #1 eval corpus, 10 docs);
+regenerate it and `data/prd/benchmarks/eval/queryset.jsonl` with
+`data/prd/benchmarks/eval/build_queryset.py`.
+
+### Failure modes (verified)
+
+- **llama-server down** → sidecar still boots; pi's LLM calls error (`Connection error.` in
+  pi.log), run ends in ~10s with `done=false`, `tokens.output=0`, no ANSWER.md. No hang.
+- **port collision** → `free_port()` binds a fresh ephemeral port per run; concurrent runs differ.
+- **corrupt / non-zip dataroom** → `prepare_dataroom` exits with
+  `ERROR: dataroom must be a .zip or a folder` (SystemExit, not a partial run).
