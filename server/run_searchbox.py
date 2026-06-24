@@ -226,6 +226,32 @@ def count_tool_calls(log_path: Path) -> int:
     return sum(1 for raw in open(log_path, "rb") if b'"type":"tool_execution_start"' in raw)
 
 
+def assistant_text(line: str) -> str:
+    """From an ASSISTANT message_end event, return the concatenated non-thinking text blocks. pi
+    streams a message_end for the USER prompt too; capturing it would write the QUESTION into
+    ANSWER.md when the model never answered (e.g. LLM unreachable). Only assistant text counts as a
+    candidate answer. See #39."""
+    try:
+        ev = json.loads(line)
+        msg = ev.get("message") or {}
+        if msg.get("role") != "assistant":
+            return ""
+        content = msg.get("content") or []
+        parts = [b.get("text", "") for b in content
+                 if isinstance(b, dict) and b.get("type") == "text"]
+        return "".join(parts).strip()
+    except Exception:
+        return ""
+
+
+def run_is_done(stop_reason: str, has_answer: bool, output_tokens: int) -> bool:
+    """A run is done iff it stopped on a natural budget condition, produced an answer, AND the LLM
+    actually generated output (output_tokens>0). The output guard makes failure fail-CLOSED: a run
+    where the LLM never responded (output==0) is NOT done even if a stray answer file exists. #39."""
+    return (stop_reason in ("budget_spent", "first_turn_done")
+            and has_answer and output_tokens > 0)
+
+
 def answer_present(work_dir: Path) -> bool:
     """An answer exists iff ANSWER.md is present with non-whitespace content. (Previously gated on
     size > 200 bytes, which marked short-but-correct answers absent — e.g. a 67-byte 'The battery
@@ -418,16 +444,7 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
 
     ans_path = work_dir / "ANSWER.md"
 
-    def extract_text(line: str) -> str:
-        """From a message_end event, return the concatenated non-thinking text blocks."""
-        try:
-            ev = json.loads(line)
-            content = (ev.get("message") or {}).get("content") or []
-            parts = [b.get("text", "") for b in content
-                     if isinstance(b, dict) and b.get("type") == "text"]
-            return "".join(parts).strip()
-        except Exception:
-            return ""
+    extract_text = assistant_text  # module-level helper (assistant-only; see #39)
 
     try:
         while True:
@@ -606,7 +623,7 @@ def main():
             cs.terminate()
 
     spent = usage.get(BUDGET_METRIC, 0)
-    done = stop_reason in ("budget_spent", "first_turn_done") and answer_present(work_dir)
+    done = run_is_done(stop_reason, answer_present(work_dir), usage.get("output", 0))
     write_run_meta(job_dir, stop_reason=stop_reason, turns=turn, done=done,
                    budget=args.budget,                    # budget is in TURNS
                    budget_pct=round(100*turn/args.budget, 1) if args.budget else None,
