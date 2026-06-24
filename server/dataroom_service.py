@@ -324,6 +324,32 @@ def _resolve_paths(paths) -> list:
     return out
 
 
+# OPENCLAW_TOPK: O(n) top-k selection (R08). argpartition does an O(n) partial selection instead
+# of argsort's O(n log n) full sort, then sorts only the k survivors. The returned index order is
+# made DETERMINISTIC (and identical to argsort(-sims)[:k] for untied scores) via a lexsort that
+# breaks score ties by ascending index. Rollback = TOPK_METHOD=argsort (the prior behavior).
+TOPK_METHOD = os.environ.get("TOPK_METHOD", "argpartition").lower()
+
+
+def _topk_idx(sims: np.ndarray, k: int) -> np.ndarray:
+    """Indices of the top-k largest values in `sims`, sorted desc with index-asc tie-break.
+
+    Exact (100% recall): same result set as np.argsort(-sims)[:k]. Guards k>=n and k<=0."""
+    n = int(sims.shape[0])
+    k = min(int(k), n)
+    if k <= 0:
+        return np.empty(0, dtype=np.intp)
+    if TOPK_METHOD == "argsort" or k >= n:
+        # Full sort path (rollback knob, or when k spans everything so partition saves nothing).
+        cand = np.arange(n)
+    else:
+        # O(n) partial selection of the k highest scores (unordered), then sort just those k.
+        cand = np.argpartition(-sims, k - 1)[:k]
+    # Deterministic ordering: primary = score desc, secondary = original index asc.
+    order = np.lexsort((cand, -sims[cand]))
+    return cand[order]
+
+
 def _build_scope(files: list, size: int, overlap: int):
     """Read+chunk+embed the given files NOW. Returns (embs (N,D) normalized, meta list)."""
     texts, meta = [], []
@@ -377,7 +403,7 @@ async def search(req: Request):
 
     qe = _encode([q], role="query")[0]
     sims = embs @ qe
-    order = np.argsort(-sims)[:k]
+    order = _topk_idx(sims, k)
     results = [{
         "path": meta[i]["path"],
         "chunk": int(meta[i]["chunk"]),
@@ -415,7 +441,7 @@ async def answer(req: Request):
     # stage 1: dense retrieve wide
     qe = _encode([q], role="query")[0]
     sims = embs @ qe
-    cand = np.argsort(-sims)[:fetch_k]
+    cand = _topk_idx(sims, fetch_k)
     cand_texts = [meta[i]["text"] for i in cand]
     # stage 2: cross-encoder rerank narrow
     ranked = _rerank_texts(q, cand_texts, top_n=k)
