@@ -1,5 +1,7 @@
 # Searchbox
 
+![Searchbox](docs/img/banner.png)
+
 Give it a **prompt**, a **`.zip`** (or folder), and a **turn budget**. A self-hosted model in a
 minimal [Pi](https://pi.dev) harness explores the dataroom with local retrieval
 (jina-embeddings-v5-text-small + jina-reranker-v3, no web) for that many turns, then answers
@@ -10,17 +12,13 @@ tools - **high-level** task tools that run the whole embed->rank pipeline over t
 **low-level** stateless model primitives (embed, rerank, similarity, ...) - plus the stock Pi
 built-ins (grep/read/...). Which does it reach for, and can it answer in a single turn?
 
-![Searchbox main UI](docs/img/main-ui.png)
-
-The per-job dashboard streams the live run: context window, token usage, turn budget, tool-call
-distribution (with the actual programs each `bash` ran), wall-time split, and an ACTIVITY feed
-showing every tool call **with its parameters**.
-
-![Searchbox run dashboard](docs/img/dashboard.png)
-
 ## How it works
 
-`server/run_searchbox.py` drives a `pi --mode rpc` session:
+You submit a prompt, an optional dataroom `.zip`, and a turn budget from the homepage:
+
+![Searchbox main UI](docs/img/main-ui.png)
+
+`server/run_searchbox.py` then drives a `pi --mode rpc` session:
 
 1. The dataroom is unzipped to `dataroom/` (read-only; a single wrapper dir is stripped). The
    sidecar (`server/dataroom_service.py`) indexes **nothing** at boot - retrieval scopes are
@@ -39,6 +37,39 @@ showing every tool call **with its parameters**.
    `Continue.` -> agent works -> idle). `run_meta.json` records stop reason, turns, per-turn token
    breakdown, tool calls, and config. (We stop at a turn boundary because a run cannot be cleanly
    interrupted mid-turn anyway, and turns are the user-legible unit.)
+
+The per-job dashboard streams the live run: context window, token usage, turn budget, tool-call
+distribution (with the actual programs each `bash` ran), wall-time split, and an ACTIVITY feed
+showing every tool call **with its parameters**.
+
+![Searchbox run dashboard](docs/img/dashboard.png)
+
+## Models
+
+Three model roles, each independently swappable (env knobs) and runnable on **local weights or the
+Jina cloud API** (`EMBED_BACKEND` / `RERANK_BACKEND` = `local` | `api`):
+
+| Role | Default | Other built-in options | Knob |
+| --- | --- | --- | --- |
+| Agent LLM | `qwen3.6` (any OpenAI-compatible server via `LLAMA_URL`) | any chat model you point `LLAMA_URL` + `MODEL_ID` at | `LLAMA_URL`, `MODEL_ID`, `CONTEXT_WINDOW` |
+| Embedder | `jina-embeddings-v5-text-small` | `jina-embeddings-v5-text-nano` (lighter) | `EMBED_MODEL`, `API_EMBED_MODEL` |
+| Reranker | `jina-reranker-v3` | `jina-reranker-v2-base-multilingual` | `RERANK_MODEL`, `API_RERANK_MODEL` |
+
+- **Agent LLM** runs on your own OpenAI-compatible endpoint (e.g. a local llama.cpp / vLLM serving
+  `qwen3.6`). It is the thing under test - it reads the dataroom and writes the answer.
+- **Embedder + reranker** power retrieval. Local loading supports both reranker families: v3
+  (`AutoModel`) and v2-base-multilingual (`AutoModelForSequenceClassification`); the loader picks
+  whichever class exposes `.rerank()`.
+- **Local GPU with auto-CPU-offload**: `EMBED_DEVICE=cuda` runs retrieval on the GPU, but if the
+  card lacks headroom (a colocated agent LLM already filled VRAM) the loader checks free VRAM
+  against `MIN_FREE_VRAM_MB` (default 1500) and transparently falls back to CPU instead of OOMing;
+  CUDA OOM at load time is caught too. `EMBED_DEVICE=cpu` (default) keeps all VRAM for the LLM.
+  This is why a single 24 GB box running the agent LLM serves retrieval through the API backend
+  (the weights would not fit alongside the LLM), while idle/larger boxes run everything locally.
+
+The retrieval models are the *same two* whether you pick `local` or `api` - only where embed/rerank
+runs changes (a clean local-vs-api ablation axis). Embeddings are L2-normalized on both paths
+(cosine == dot).
 
 ## Tools
 
@@ -115,26 +146,9 @@ cat ./out/ANSWER.md
 
 Web UI: `python -m server.app`, then open `http://localhost:8000`.
 
-Retrieval runs on local weights by default; set `EMBED_BACKEND=api RERANK_BACKEND=api` (+
-`JINA_API_KEY`) to call the Jina cloud instead. Same tools either way - only where embed/rerank
-runs changes (a clean local-vs-api ablation axis).
-
-**Local models.** The embedder runs through `sentence_transformers` and the reranker through
-`transformers`. Supported out of the box (set `EMBED_MODEL` / `RERANK_MODEL`):
-
-- embed: `jina-embeddings-v5-text-small` (default) or `jina-embeddings-v5-text-nano` (lighter)
-- rerank: `jina-reranker-v3` (default) or `jina-reranker-v2-base-multilingual`
-
-The reranker loader handles both families - v3 (`AutoModel`) and v2-base-multilingual
-(`AutoModelForSequenceClassification`) - by picking whichever class exposes `.rerank()`.
-
-**GPU with auto-CPU-offload.** `EMBED_DEVICE=cuda` runs retrieval on the GPU, but if the card has
-no headroom (e.g. a colocated LLM already filled VRAM) the loader transparently falls back to
-CPU instead of OOMing: it checks free VRAM against `MIN_FREE_VRAM_MB` (default 1500) before
-loading, and also catches CUDA OOM at load time. Default `EMBED_DEVICE=cpu` keeps all VRAM for
-the LLM. (This is why a 24 GB box already running the agent LLM serves retrieval via the API
-backend - the weights would not fit alongside the LLM - while smaller/idle boxes can run
-everything locally on GPU or CPU.)
+Web UI runs retrieval on local weights by default; set `EMBED_BACKEND=api RERANK_BACKEND=api` (+
+`JINA_API_KEY`) to call the Jina cloud instead. See [Models](#models) for the built-in embedder /
+reranker options and the GPU auto-CPU-offload behavior.
 
 ## Scheduling (single slot)
 
