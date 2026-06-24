@@ -113,15 +113,44 @@ def _strip_single_wrapper(dataroom_dir: Path):
         inner.rmdir()
 
 
+# Folder-source hardlinking shares inodes with the source tree, so an in-place write into the
+# dataroom (the model is told not to, but bash could) would corrupt the source. Fail-closed:
+# default OFF (independent copies, the always-safe behavior). DATAROOM_HARDLINK=1 opts into the
+# zero-copy path for trusted same-fs folder sources (e.g. ablation sweeps over a fixed corpus).
+DATAROOM_HARDLINK = os.environ.get("DATAROOM_HARDLINK", "0") != "0"
+
+
+def _hardlink_or_copy_file(s: Path, d: Path):
+    """Copy a source file into the job dir. With DATAROOM_HARDLINK=1, hardlink instead (shares
+    the inode, no byte copy) on the same filesystem, falling back to copy2 across filesystems."""
+    if DATAROOM_HARDLINK:
+        try:
+            os.link(s, d)
+            return
+        except OSError:
+            pass
+    shutil.copy2(s, d)
+
+
+def _copy_dir_linked(src: Path, dst: Path):
+    dst.mkdir(parents=True, exist_ok=True)
+    for item in src.iterdir():
+        target = dst / item.name
+        if item.is_dir():
+            _copy_dir_linked(item, target)
+        else:
+            _hardlink_or_copy_file(item, target)
+
+
 def prepare_dataroom(src: Path, dataroom_dir: Path):
     dataroom_dir.mkdir(parents=True, exist_ok=True)
     if src.is_dir():
         for item in src.iterdir():
             dst = dataroom_dir / item.name
             if item.is_dir():
-                shutil.copytree(item, dst, dirs_exist_ok=True)
+                _copy_dir_linked(item, dst)
             else:
-                shutil.copy2(item, dst)
+                _hardlink_or_copy_file(item, dst)
         _strip_single_wrapper(dataroom_dir)
         return
     if src.is_file() and zipfile.is_zipfile(src):

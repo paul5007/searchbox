@@ -11,7 +11,7 @@ GET  /jobs/{id}/dashboard          -> the dashboard HTML
 GET  /                             -> submit page
 GET  /health
 """
-import hashlib, json, os, signal, subprocess, sys, threading, time, uuid
+import hashlib, json, os, shutil, signal, subprocess, sys, threading, time, uuid
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse, JSONResponse, Response
@@ -324,6 +324,17 @@ DEFAULT_DATAROOM = Path(os.environ.get(
     "DEFAULT_DATAROOM", str(HERE.parent / "data" / "default-dataroom.zip")))
 
 
+def _link_or_copy(src: Path, dst: Path):
+    """Hardlink src->dst (no data copy; both are read-only inputs). Fall back to a byte copy
+    across filesystems or if the FS does not support hardlinks."""
+    try:
+        if dst.exists():
+            dst.unlink()
+        os.link(src, dst)
+    except OSError:
+        shutil.copyfile(src, dst)
+
+
 @app.post("/jobs")
 async def create(prompt: str = Form(...), budget: int = Form(...),
                  force_budget: bool = Form(True),
@@ -345,24 +356,32 @@ async def create(prompt: str = Form(...), budget: int = Form(...),
     job_id = uuid.uuid4().hex[:12]
     job_dir = JOBS / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
+    target = job_dir / "input.zip"
     if dataroom is not None and dataroom.filename:
         if not dataroom.filename.lower().endswith(".zip"):
             raise HTTPException(400, "dataroom must be a .zip file")
-        data = await dataroom.read()
-        if data[:2] != b"PK":
+        # Stream the upload straight to disk instead of read()-ing the whole zip into RAM. Peek
+        # the 2-byte PK magic first, then rewind and copy the file object.
+        head = await dataroom.read(2)
+        if head[:2] != b"PK":
             raise HTTPException(400, "dataroom is not a valid zip")
+        await dataroom.seek(0)
+        with open(target, "wb") as out:
+            shutil.copyfileobj(dataroom.file, out)
         dataroom_name = dataroom.filename
     else:
         if not DEFAULT_DATAROOM.exists():
             raise HTTPException(400, "no dataroom uploaded and no default dataroom configured")
-        data = DEFAULT_DATAROOM.read_bytes()
+        # Default corpus is a shared read-only zip — hardlink it to input.zip (no RAM copy, no
+        # re-materialize per job). Falls back to a plain copy across filesystems / if link fails.
+        _link_or_copy(DEFAULT_DATAROOM, target)
         dataroom_name = DEFAULT_DATAROOM.name
-    (job_dir / "input.zip").write_bytes(data)
+    dataroom_bytes = target.stat().st_size
     with _cond:
         _jobs[job_id] = {"status": "queued", "query": prompt, "budget": budget,
                          "force_budget": bool(force_budget),
                          "SEARCHBOX_TOOLS": tools_sel,
-                         "dataroom_name": dataroom_name, "dataroom_bytes": len(data),
+                         "dataroom_name": dataroom_name, "dataroom_bytes": dataroom_bytes,
                          "submitted": time.time()}
         _queue.append(job_id)
         proc = _preempt_running_locked()   # a fresh submission takes the slot from any running job
