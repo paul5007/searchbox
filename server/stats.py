@@ -115,6 +115,30 @@ def _walk_tree(root: Path):
 
 MAX_LOG_BYTES = 24 * 1024 * 1024
 
+# orjson decodes 3–9× faster than stdlib json (R03b). Optional: fall back to stdlib if absent.
+try:
+    import orjson as _orjson
+
+    def _loads(raw: bytes):
+        # orjson is strict (rejects non-UTF8); fall back to the lenient stdlib decode so a
+        # malformed byte in a line is handled identically to the pre-orjson behavior.
+        try:
+            return _orjson.loads(raw)
+        except Exception:
+            return json.loads(raw.decode("utf-8", "ignore"))
+except ImportError:  # pragma: no cover - orjson is a declared dep
+    def _loads(raw: bytes):
+        return json.loads(raw.decode("utf-8", "ignore"))
+
+
+# Substring pre-filter (R03b): the fold only reacts to these event types. A line whose bytes
+# contain none of these names cannot produce a fold side effect, so it is skipped WITHOUT a
+# JSON decode. Matched on the bare type NAME (not '"type":"x"') so it is robust to whitespace
+# variants. False positives (e.g. a tool result echoing one of these strings) are harmless —
+# they decode to a non-matching type and fold as a no-op, exactly as before.
+_FOLD_MARKERS = (b"agent_start", b"turn_start", b"compaction_end",
+                 b"tool_execution_start", b"tool_execution_end", b"message_end")
+
 
 def _event_from_line(raw: bytes):
     """Decode one raw pi.log line into an event dict, or None to skip it.
@@ -122,14 +146,17 @@ def _event_from_line(raw: bytes):
     Single source of truth for line→event so the full and incremental parsers fold
     byte-identical event streams. message_update is dropped (streaming spam); the RPC
     session banner becomes a synthetic _session_start (it resets the errors window)."""
-    if b'"type":"message_update"' in raw:
-        return None
     if b"===== RPC SESSION" in raw:
         return {"type": "_session_start"}
+    if b'"type":"message_update"' in raw:
+        return None
+    # Skip the decode entirely for lines that cannot affect the aggregate.
+    if not any(m in raw for m in _FOLD_MARKERS):
+        return None
     if not raw.lstrip().startswith(b"{"):
         return None
     try:
-        return json.loads(raw.decode("utf-8", "ignore"))
+        return _loads(raw)
     except Exception:
         return None
 
@@ -391,7 +418,7 @@ def session_usage_incremental(job_dir: Path) -> dict:
         if b'"usage"' not in raw:
             continue
         try:
-            o = json.loads(raw.decode("utf-8", "ignore"))
+            o = _loads(raw)
         except Exception:
             continue
         msg = o.get("message") if isinstance(o, dict) else None
