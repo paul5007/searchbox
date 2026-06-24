@@ -647,5 +647,13 @@ def favicon():
     raise HTTPException(404, "no favicon")
 
 
+@app.get("/og-image.jpg")
+def og_image():
+    f = WEB / "og-image.jpg"
+    if f.exists():
+        return FileResponse(str(f), media_type="image/jpeg")
+    raise HTTPException(404, "no og image")
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
