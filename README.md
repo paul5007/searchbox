@@ -1,20 +1,30 @@
 # Searchbox
 
+Given a **prompt**, [a **`.zip`** dataroom](https://github.com/hanxiao/dataroom), and a **token budget**. A self-hosted `Qwen3.6-35B-A3B` in a
+minimal [Pi](https://pi.dev) harness explores the dataroom with local tools such as bash, grep, dense retrievers in an **airgapped** loop, then answers.
+
 ![Searchbox](docs/img/banner.png)
 
-Give it a **prompt**, a **`.zip`** (or folder), and a **turn budget**. A self-hosted model in a
-minimal [Pi](https://pi.dev) harness explores the dataroom with local retrieval
-(jina-embeddings-v5-text-small + jina-reranker-v3, no web) for that many turns, then answers
-(`ANSWER.md`). Token cost is recorded per turn but is not the stop condition.
+<p align="center">
+  <b>Live demo → <a href="https://hanxiao.io/searchbox">hanxiao.io/searchbox</a></b>
+</p>
 
-The point is to watch what a model does under a restrained harness: it gets two tiers of retrieval
-tools - **high-level** task tools that run the whole embed->rank pipeline over the dataroom, and
-**low-level** stateless model primitives (embed, rerank, similarity, ...) - plus the stock Pi
-built-ins (grep/read/...). Which does it reach for, and can it answer in a single turn?
+
+## Why
+
+Everyone who knows me knows I'm super test-time-compute-pilled. And in my view, **search is test-time compute**: your trained embeddings, rerankers, single-/multi-vector retrievers, query expanders, are wired into a pipeline to squeeze out the best relevancy. If you don't scale test-time compute, say a keyword search hands you the final answer, the result is probably not good enough. If you do scale it, say you add embedding search and then filter with a reranker, you most likely get a better answer. So I built searchbox as a research testbed to explore a few questions on TTC:
+
+- Model preferences: which tool does it reach for in agentic search?
+- Is grep really all you need, i.e. where does a dense retriever add nothing to search quality?
+- Does scaling test-time compute via token budget forcing give better answers, especially on the hard questions?
+
+To make this work, I prebuilt a few projects to pave the road for searchbox: [dataroom](https://github.com/hanxiao/dataroom), which does agentic crawling and spits out a zip; and [knowledge-graph](https://github.com/hanxiao/knowledge-graph-extractor), which extracts entity relations and walks the longest path to find non-trivial questions to test searchbox with. Feel free to dig into those too.
+
+Finally, I deliberately made searchbox an airgapped harness, because I don't want the model cheating with web information. It should exhaustively and exclusively use what's in the zip (which can be a knowledge dump from the web via dataroom, but not at the searchbox step).
 
 ## How it works
 
-You submit a prompt, an optional dataroom `.zip`, and a turn budget from the homepage:
+You submit a prompt, [an optional dataroom `.zip`](https://github.com/hanxiao/dataroom) (when not given the built-in `jina-corpus.zip` is then used), and a turn budget from the homepage:
 
 ![Searchbox main UI](docs/img/main-ui.png)
 
