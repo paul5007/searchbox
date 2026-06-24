@@ -72,10 +72,10 @@
       <textarea id="prompt" placeholder="What question should be answered from the dataroom?"></textarea>
     </div>
     <div class="field">
-      <label class="lbl" for="dataroom">Dataroom (.zip, optional)</label>
+      <label class="lbl" for="dataroom">Dataroom (.zip, optional &mdash; jina-corpus.zip by default)</label>
       <div class="filebtn">
-        <label class="pick" for="dataroom">Choose file</label>
-        <input type="file" id="dataroom" accept=".zip" />
+        <label class="pick" for="dataroom">Upload .zip</label>
+        <input type="file" id="dataroom" accept=".zip,application/zip,application/x-zip-compressed" />
         <span class="fname" id="fname"></span>
         <label class="toggle" style="margin-left:18px">
           <input type="checkbox" id="force" />
@@ -148,8 +148,11 @@ const escn=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;"
     keys.forEach(syncMaster);
   }catch(e){$("tools").innerHTML='<span class="msg">could not load tools</span>';}
 })();
+function isZip(f){return f && /\.zip$/i.test(f.name);}
 $("dataroom").addEventListener("change",()=>{
   const f=$("dataroom").files[0];
+  if(f && !isZip(f)){$("dataroom").value="";$("fname").textContent="";$("msg").textContent="only .zip files are allowed";return;}
+  $("msg").textContent="";
   $("fname").textContent=f?f.name:"";
 });
 $("force").addEventListener("change",()=>{
@@ -161,6 +164,7 @@ $("f").addEventListener("submit",async e=>{
   const force=$("force").checked, budget=parseInt($("budget").value,10)||10;
   const tools=[...document.querySelectorAll(".tool:checked")].map(c=>c.value).join(",");
   if(prompt.length<5){$("msg").textContent="prompt too short";return;}
+  if(file && !isZip(file)){$("msg").textContent="only .zip files are allowed";return;}
   $("go").disabled=true;$("msg").textContent="queuing…";
   const fd=new FormData();fd.append("prompt",prompt);fd.append("budget",budget);fd.append("force_budget",force?"true":"false");fd.append("tools",tools);
   if(file)fd.append("dataroom",file);

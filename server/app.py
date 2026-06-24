@@ -346,7 +346,11 @@ async def create(prompt: str = Form(...), budget: int = Form(...),
     job_dir = JOBS / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     if dataroom is not None and dataroom.filename:
+        if not dataroom.filename.lower().endswith(".zip"):
+            raise HTTPException(400, "dataroom must be a .zip file")
         data = await dataroom.read()
+        if data[:2] != b"PK":
+            raise HTTPException(400, "dataroom is not a valid zip")
         dataroom_name = dataroom.filename
     else:
         if not DEFAULT_DATAROOM.exists():
