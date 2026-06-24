@@ -146,7 +146,6 @@ const escn=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;"
     });
     document.querySelectorAll(".tool").forEach(c=>c.addEventListener("change",()=>syncMaster(c.dataset.group)));
     keys.forEach(syncMaster);
-    $("toolcount").textContent=`(${tools.length} available, ${keys.length} groups, embedding/rerank based)`;
   }catch(e){$("tools").innerHTML='<span class="msg">could not load tools</span>';}
 })();
 $("dataroom").addEventListener("change",()=>{
