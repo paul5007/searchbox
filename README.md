@@ -12,15 +12,15 @@ minimal [Pi](https://pi.dev) harness explores the dataroom with local tools such
 
 ## Why
 
-Everyone who knows me knows I'm super test-time-compute-pilled. And in my view, **search is test-time compute**: your trained embeddings, rerankers, single-/multi-vector retrievers, query expanders, are wired into a pipeline to squeeze out the best relevancy. If you don't scale test-time compute, say a keyword search hands you the final answer, the result is probably not good enough. If you do scale it, say you add embedding search and then filter with a reranker, you most likely get a better answer. So I built searchbox as a research testbed to explore a few questions on TTC:
+Everyone who knows me knows I'm super test-time-compute-pilled. In my view, **search is test-time compute (TTC)**: you wire trained embeddings, rerankers, single-/multi-vector retrievers, and query expanders into a pipeline to squeeze out relevancy. Don't scale TTC, say a keyword search hands you the answer, and it's probably not good enough. Scale it, say add embedding search then filter with a reranker, and you most likely get a better one. So I built `searchbox` as a testbed to explore a few questions on TTC:
 
 - Model preferences: which tool does it reach for in agentic search?
-- Is grep really all you need, i.e. where does a dense retriever add nothing to search quality?
+- [Is grep really all you need](https://arxiv.org/abs/2605.15184), i.e. where does a dense retriever add nothing to search quality?
 - Does scaling test-time compute via token budget forcing give better answers, especially on the hard questions?
 
 To make this work, I prebuilt a few projects to pave the road for searchbox: [dataroom](https://github.com/hanxiao/dataroom), which does agentic crawling and spits out a zip; and [knowledge-graph](https://github.com/hanxiao/knowledge-graph-extractor), which extracts entity relations and walks the longest path to find non-trivial questions to test searchbox with. Feel free to dig into those too.
 
-Finally, I deliberately made searchbox an airgapped harness, because I don't want the model cheating with web information. It should exhaustively and exclusively use what's in the zip (which can be a knowledge dump from the web via dataroom, but not at the searchbox step).
+Finally, I made searchbox an airgapped harness, because I don't want the model cheating with web information. I want to lock search in the box and itt should exhaustively and exclusively use what's in the box (which is a knowledge dump .zip from the web via [dataroom](https://github.com/hanxiao/dataroom), but not at the searchbox step).
 
 ## How it works
 
