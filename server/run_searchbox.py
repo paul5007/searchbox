@@ -299,6 +299,32 @@ TASK_COMMAND = "{query}"
 # add over vanilla pi). No guidance on method or content.
 KEEP_GOING = "Continue."
 
+# ── R02a: per-turn thinking-budget policy hook ───────────────────────────────────────────────
+# Thinking effort is a per-turn decision, not a run-global constant. The orchestrator owns every
+# prompt it sends to pi, so the per-turn control is the Qwen3 soft-switch appended to the message
+# (`/no_think` disables thinking for that turn; `/think` forces it). reasoning_effort is silently
+# ignored on Qwen3 — the soft-switch / enable_thinking chat-template var is the real lever (#15).
+#
+# THINKING_POLICY:
+#   off        (default) — append nothing; the run-global THINKING_LEVEL governs. No behavior change.
+#   nudge_gate           — the question turn inherits run-global thinking; the mechanical KEEP_GOING
+#                          nudge turns (format / write ANSWER.md) are gated OFF (`/no_think`).
+#   gate_all             — every turn gated OFF (the cheapest, lowest-quality floor; for ablation).
+THINKING_POLICY = os.environ.get("THINKING_POLICY", "off")
+_THINK_OFF = " /no_think"
+
+
+def thinking_switch(is_nudge: bool, policy: str = None) -> str:
+    """Return the per-turn thinking soft-switch to append to a prompt message. `is_nudge` marks a
+    mechanical KEEP_GOING turn (vs the initial question turn). Returns '' when the policy makes no
+    change, so policy=off leaves the prompt byte-identical to vanilla (#15)."""
+    policy = THINKING_POLICY if policy is None else policy
+    if policy == "gate_all":
+        return _THINK_OFF
+    if policy == "nudge_gate":
+        return _THINK_OFF if is_nudge else ""
+    return ""  # off / unknown -> no change
+
 
 def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
     env = dict(os.environ)
@@ -438,9 +464,10 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
     # Fresh run: send the question as the first user message. Resume: the session already has
     # the full history (pi --continue), so just nudge it to keep going.
     if getattr(args, "resume", False):
-        send({"type": "prompt", "message": KEEP_GOING})
+        send({"type": "prompt", "message": KEEP_GOING + thinking_switch(is_nudge=True)})
     else:
-        send({"type": "prompt", "message": TASK_COMMAND.format(query=args.query)})
+        send({"type": "prompt",
+              "message": TASK_COMMAND.format(query=args.query) + thinking_switch(is_nudge=False)})
 
     ans_path = work_dir / "ANSWER.md"
 
@@ -514,7 +541,7 @@ def drive(job_dir, work_dir, agent_dir, dataroom_dir, args, budget):
             if turn >= budget:
                 stop_reason = "budget_spent"; break
 
-            send({"type": "prompt", "message": KEEP_GOING})
+            send({"type": "prompt", "message": KEEP_GOING + thinking_switch(is_nudge=True)})
     except KeyboardInterrupt:
         stop_reason = "interrupted"
     finally:
