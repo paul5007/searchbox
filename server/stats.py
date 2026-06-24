@@ -4,7 +4,7 @@
 Token totals come from the append-only Pi session JSONL (compaction-safe; see run_searchbox.py),
 using the same fields Pi uses (input/output/cacheRead/cacheWrite). The BUDGET is `input`.
 """
-import json, os, re, shlex, urllib.request
+import json, os, re, shlex, time, urllib.request
 from pathlib import Path
 
 BUDGET_METRIC = os.environ.get("BUDGET_METRIC", "input")
@@ -435,13 +435,40 @@ def session_usage_incremental(job_dir: Path) -> dict:
     return out
 
 
+# TTL-cache for the per-poll directory walk + dataroom file count (R03c). The dashboard polls
+# every 3s and N dashboards can poll the same job; the work-tree changes at most once per turn,
+# so a short TTL lets concurrent/rapid polls share one os-walk per window. STATS_DIRWALK_TTL=0
+# disables the cache (always-fresh, the pre-change behavior) and is the rollback knob.
+DIRWALK_TTL = float(os.environ.get("STATS_DIRWALK_TTL", "3"))
+_dirwalk_cache: dict = {}  # str(work) -> (expiry_ts, (tree, size, file_count))
+
+
+def _compute_dirwalk(work: Path, dataroom: Path):
+    tree, size = _walk_tree(work)
+    tree["name"] = "output"
+    fc = sum(1 for p in dataroom.rglob("*") if p.is_file()) if dataroom.exists() else 0
+    return tree, size, fc
+
+
+def _dirwalk_cached(work: Path, dataroom: Path):
+    if DIRWALK_TTL <= 0:
+        return _compute_dirwalk(work, dataroom)
+    key = str(work)
+    now = time.time()
+    ent = _dirwalk_cache.get(key)
+    if ent and ent[0] > now:
+        return ent[1]
+    val = _compute_dirwalk(work, dataroom)
+    _dirwalk_cache[key] = (now + DIRWALK_TTL, val)
+    return val
+
+
 def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
     # work/ is pi's sandbox cwd: dataroom/ + the model's outputs (ANSWER.md, scratch). Plumbing
     # lives in job_dir and is intentionally not shown. Walk work/ for the tree the user sees.
     work = job_dir / "work"
     dataroom = work / "dataroom"
-    tree, size = _walk_tree(work)
-    tree["name"] = "output"
+    tree, size, dataroom_file_count = _dirwalk_cached(work, dataroom)
     if STATS_INCREMENTAL:
         log = parse_pi_log_incremental(job_dir / "pi.log")
         usage = session_usage_incremental(job_dir)
@@ -486,8 +513,7 @@ def job_stats(job_dir: Path, budget: int = None, live: bool = False) -> dict:
         "context_window": ctx_window,
         "context_tokens": usage.get("context_tokens", 0),
         "context_percent": round(min(100, 100 * usage.get("context_tokens", 0) / ctx_window), 1) if ctx_window else 0,
-        "dataroom": {"tree": tree, "size_bytes": size,
-                   "file_count": sum(1 for p in dataroom.rglob("*") if p.is_file()) if dataroom.exists() else 0},
+        "dataroom": {"tree": tree, "size_bytes": size, "file_count": dataroom_file_count},
         "answer_md": answer,
         "timing": read_timing(job_dir),
         "tps": llama_tps() if live else {},
