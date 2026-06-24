@@ -2,6 +2,11 @@
 # to the version searchbox pins, overlay searchbox source. CPU embedder; LLM via shared llama.
 FROM ghcr.io/hanxiao/dataroom:latest
 
+# Link the published image to the repo on GHCR (Packages -> repository).
+LABEL org.opencontainers.image.source="https://github.com/hanxiao/searchbox"
+LABEL org.opencontainers.image.description="Searchbox: budget-bounded closed-dataroom QA harness"
+LABEL org.opencontainers.image.licenses="MIT"
+
 ENV PI_BIN=pi PI_SKIP_VERSION_CHECK=1
 ARG PI_VERSION=0.80.1
 RUN npm install -g @earendil-works/pi-coding-agent@${PI_VERSION} && npm cache clean --force

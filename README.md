@@ -147,6 +147,23 @@ tests/test_scheduler.py           scheduler tests (no GPU)
 
 ## Get started
 
+### Prebuilt image (GHCR)
+
+The full app image (torch + node + Pi + cached retrieval weights + searchbox source) is published
+to GitHub Container Registry, so you can skip the build:
+
+```bash
+docker pull ghcr.io/hanxiao/searchbox:latest
+docker run -d --name searchbox --gpus all -p 8001:8001 --env-file .env \
+  -v $PWD/data:/data ghcr.io/hanxiao/searchbox:latest
+# open http://localhost:8001
+```
+
+Tags: `latest` and a dated tag (e.g. `20260623`). Rebuild locally with `docker build -t
+searchbox .` only when you change the source.
+
+### From source
+
 ```bash
 cp .env.example .env          # point LLAMA_URL at your OpenAI-compatible model server
 uv venv --python 3.11 .venv
