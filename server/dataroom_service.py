@@ -56,6 +56,10 @@ EMBED_TASK = os.environ.get("EMBED_TASK", "retrieval")
 # ("Backend 'onnx' is not supported") and publishes no onnx weights — so EMBED_ONNX=1 errors
 # out cleanly on v5 (see discovery issue). It is wired for a future onnx-capable EMBED_MODEL.
 EMBED_ONNX = os.environ.get("EMBED_ONNX", "0") == "1"
+# int8 dynamic-quant ONNX (R06b, #19). int8 implies the ONNX backend; loads the prebuilt
+# avx512_vnni qint8 graph. Quality-gated (recall@8 >= 0.98 vs fp32). Unset/"" -> fp32 onnx.
+EMBED_QUANT = os.environ.get("EMBED_QUANT", "").strip().lower()
+_QUANT_FILE = {"int8": "model_qint8_avx512_vnni.onnx"}
 CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", "1400"))
 CHUNK_OVERLAP = int(os.environ.get("CHUNK_OVERLAP", "180"))
 
@@ -151,16 +155,23 @@ def embed_model():
                     # via onnx (e.g. jina-v5 custom_st rejects backend!=torch, or no onnx weights),
                     # raise a structured error rather than silently serving fp32 the operator did
                     # not ask for (that would hide a misconfig and mask the expected speedup).
-                    print(f"[dataroom] loading embed model {EMBED_MODEL} via ONNX (CPU)", flush=True)
+                    mk = {"provider": "CPUExecutionProvider"}
+                    if EMBED_QUANT:
+                        # R06b (#19): pick the prebuilt int8 graph. Fail-closed on an unknown level.
+                        if EMBED_QUANT not in _QUANT_FILE:
+                            raise RuntimeError(
+                                f"EMBED_QUANT={EMBED_QUANT!r} unknown; supported: {sorted(_QUANT_FILE)}. "
+                                f"Unset EMBED_QUANT for fp32 ONNX.")
+                        mk["file_name"] = _QUANT_FILE[EMBED_QUANT]
+                    qtag = f" quant={EMBED_QUANT}" if EMBED_QUANT else ""
+                    print(f"[dataroom] loading embed model {EMBED_MODEL} via ONNX (CPU){qtag}", flush=True)
                     try:
                         _embed_model = SentenceTransformer(
-                            EMBED_MODEL, backend="onnx",
-                            model_kwargs={"provider": "CPUExecutionProvider"},
-                            trust_remote_code=True)
+                            EMBED_MODEL, backend="onnx", model_kwargs=mk, trust_remote_code=True)
                     except Exception as e:
                         raise RuntimeError(
-                            f"EMBED_ONNX=1 but {EMBED_MODEL} cannot load via ONNX ({type(e).__name__}: {e}). "
-                            f"This model may reject backend='onnx' or publish no onnx weights. "
+                            f"EMBED_ONNX=1{qtag} but {EMBED_MODEL} cannot load via ONNX ({type(e).__name__}: {e}). "
+                            f"This model may reject backend='onnx', lack the quant graph, or publish no onnx weights. "
                             f"Set EMBED_ONNX=0 to use the fp32 PyTorch backend.") from e
                     return _embed_model
                 print(f"[dataroom] loading embed model {EMBED_MODEL} on {dev}", flush=True)

@@ -105,6 +105,53 @@ def test_onnx_off_uses_plain_torch_loader():
         d._embed_model = None
 
 
+def test_quant_int8_selects_quant_graph():
+    d = _fresh_module({"EMBED_ONNX": "1", "EMBED_QUANT": "int8"})
+    assert d.EMBED_QUANT == "int8"
+    d._embed_model = None
+    d._want_cuda = lambda: False
+    seen = {}
+    sys.modules["sentence_transformers"] = _fake_st_module(
+        lambda a, kw, self: seen.update(kw))
+    try:
+        d.embed_model()
+        assert seen["model_kwargs"]["file_name"] == "model_qint8_avx512_vnni.onnx", seen
+    finally:
+        sys.modules.pop("sentence_transformers", None)
+        d._embed_model = None
+
+
+def test_quant_unknown_level_failcloses():
+    d = _fresh_module({"EMBED_ONNX": "1", "EMBED_QUANT": "int4"})
+    d._embed_model = None
+    d._want_cuda = lambda: False
+    sys.modules["sentence_transformers"] = _fake_st_module(lambda a, kw, self: None)
+    try:
+        d.embed_model()
+        assert False, "expected RuntimeError for unknown EMBED_QUANT"
+    except RuntimeError as e:
+        assert "unknown" in str(e) and "int4" in str(e), str(e)
+    finally:
+        sys.modules.pop("sentence_transformers", None)
+        d._embed_model = None
+
+
+def test_no_quant_omits_file_name():
+    d = _fresh_module({"EMBED_ONNX": "1", "EMBED_QUANT": ""})
+    assert d.EMBED_QUANT == ""
+    d._embed_model = None
+    d._want_cuda = lambda: False
+    seen = {}
+    sys.modules["sentence_transformers"] = _fake_st_module(
+        lambda a, kw, self: seen.update(kw))
+    try:
+        d.embed_model()
+        assert "file_name" not in seen["model_kwargs"], seen
+    finally:
+        sys.modules.pop("sentence_transformers", None)
+        d._embed_model = None
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
