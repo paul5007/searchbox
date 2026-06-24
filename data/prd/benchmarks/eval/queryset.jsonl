@@ -1,0 +1,32 @@
+{"id": "q01", "query": "What is the battery life of the Atlas-7?", "gold_answer": "8 hours", "gold_chunks": [["products/atlas_spec.md", 0]], "type": "factoid"}
+{"id": "q02", "query": "How much does the Atlas-7 cost?", "gold_answer": "74,000 US dollars", "gold_chunks": [["products/atlas_spec.md", 0]], "type": "factoid"}
+{"id": "q03", "query": "What is the payload capacity of the Orion-2?", "gold_answer": "1200 kilograms", "gold_chunks": [["products/orion_spec.md", 0]], "type": "factoid"}
+{"id": "q04", "query": "Who is the CEO of Meridian Robotics?", "gold_answer": "Dana Whitfield", "gold_chunks": [["company_overview.md", 0]], "type": "factoid"}
+{"id": "q05", "query": "In what year was Meridian Robotics founded?", "gold_answer": "2019", "gold_chunks": [["company_overview.md", 0]], "type": "factoid"}
+{"id": "q06", "query": "What onboard compute does the Atlas-7 use?", "gold_answer": "NVIDIA Jetson Orin", "gold_chunks": [["products/atlas_spec.md", 0]], "type": "factoid"}
+{"id": "q07", "query": "How long is customer telemetry data retained?", "gold_answer": "90 days", "gold_chunks": [["policies/data_retention.md", 0]], "type": "factoid"}
+{"id": "q08", "query": "What is the Atlas-7 grasp success rate on the internal benchmark?", "gold_answer": "94.2 percent", "gold_chunks": [["research/benchmarks.md", 0]], "type": "factoid"}
+{"id": "q09", "query": "How many degrees of freedom does the Atlas-7 have?", "gold_answer": "28", "gold_chunks": [["products/atlas_spec.md", 0]], "type": "factoid"}
+{"id": "q10", "query": "What is the Orion-2 list price?", "gold_answer": "38,500 US dollars", "gold_chunks": [["products/orion_spec.md", 0]], "type": "factoid"}
+{"id": "q11", "query": "What error code did incident INC-2041 report?", "gold_answer": "ERR_TORQUE_OVERFLOW", "gold_chunks": [["ops/incidents.md", 0]], "type": "literal"}
+{"id": "q12", "query": "Which incident reported error code ERR_LIDAR_TIMEOUT?", "gold_answer": "INC-2047", "gold_chunks": [["ops/incidents.md", 0]], "type": "literal"}
+{"id": "q13", "query": "What firmware version fixed the Orion-2 navigation race condition?", "gold_answer": "firmware version 4.2.1", "gold_chunks": [["ops/incidents.md", 0]], "type": "literal"}
+{"id": "q14", "query": "Where are Meridian's secrets and API keys stored?", "gold_answer": "HashiCorp Vault", "gold_chunks": [["policies/security.md", 0]], "type": "literal"}
+{"id": "q15", "query": "What is the error code for the Atlas-7 battery thermal warning incident?", "gold_answer": "ERR_THERM_LIMIT", "gold_chunks": [["ops/incidents.md", 0]], "type": "literal"}
+{"id": "q16", "query": "What ingress protection rating does the Atlas-7 have?", "gold_answer": "IP54", "gold_chunks": [["products/atlas_spec.md", 0]], "type": "literal"}
+{"id": "q17", "query": "Which firm led Meridian's Series B round?", "gold_answer": "Meridian Growth Partners", "gold_chunks": [["finance/funding.md", 0]], "type": "literal"}
+{"id": "q18", "query": "What is the company headquarters address?", "gold_answer": "410 Industry Way, Portland, Oregon", "gold_chunks": [["company_overview.md", 0]], "type": "literal"}
+{"id": "q19", "query": "How many people joined Meridian in 2025?", "gold_answer": "4", "gold_chunks": [["people/team.md", 0], ["people/team.md", 0], ["people/team.md", 0], ["people/team.md", 0]], "type": "dispersed"}
+{"id": "q20", "query": "What is the total capital Meridian has raised to date?", "gold_answer": "75.5 million US dollars", "gold_chunks": [["finance/funding.md", 0]], "type": "dispersed"}
+{"id": "q21", "query": "How many Atlas-7 releases have shipped in total?", "gold_answer": "5", "gold_chunks": [["products/atlas_changelog.md", 0], ["products/atlas_changelog.md", 0]], "type": "dispersed"}
+{"id": "q22", "query": "Which two product lines does Meridian build?", "gold_answer": "Atlas and Orion", "gold_chunks": [["company_overview.md", 0], ["company_overview.md", 0]], "type": "dispersed"}
+{"id": "q23", "query": "How many funding rounds has Meridian completed?", "gold_answer": "3", "gold_chunks": [["finance/funding.md", 0], ["finance/funding.md", 0], ["finance/funding.md", 0]], "type": "dispersed"}
+{"id": "q24", "query": "How long are incident logs retained compared to customer telemetry?", "gold_answer": "Incident logs 2 years vs telemetry 90 days", "gold_chunks": [["policies/data_retention.md", 0], ["policies/data_retention.md", 0]], "type": "dispersed"}
+{"id": "q25", "query": "How many engineers on the Firmware team joined in 2025?", "gold_answer": "2", "gold_chunks": [["people/team.md", 0], ["people/team.md", 0]], "type": "dispersed"}
+{"id": "q26", "query": "Who led the team that shipped Atlas-7 v3.0?", "gold_answer": "Priya Nair", "gold_chunks": [["products/atlas_changelog.md", 0], ["people/team.md", 0]], "type": "multi-hop"}
+{"id": "q27", "query": "What was the post-money valuation at the round that raised 55 million dollars?", "gold_answer": "310 million US dollars", "gold_chunks": [["finance/funding.md", 0], ["finance/funding.md", 0]], "type": "multi-hop"}
+{"id": "q28", "query": "Which firmware version is referenced both by the Orion-2 spec and by incident INC-2047?", "gold_answer": "4.2.1", "gold_chunks": [["products/orion_spec.md", 0], ["ops/incidents.md", 0]], "type": "multi-hop"}
+{"id": "q29", "query": "Who is the team lead that the QA team's manager also manages alongside Locomotion?", "gold_answer": "Sofia Reyes", "gold_chunks": [["people/team.md", 0], ["people/team.md", 0]], "type": "multi-hop"}
+{"id": "q30", "query": "Which Atlas-7 release extended the battery life to the value listed in the current spec?", "gold_answer": "v3.1", "gold_chunks": [["products/atlas_spec.md", 0], ["products/atlas_changelog.md", 0]], "type": "multi-hop"}
+{"id": "q31", "query": "Who joined earlier: the Locomotion team lead or the Perception team lead?", "gold_answer": "Priya Nair (Locomotion, 2020-07) joined before Sofia Reyes (Perception, 2021-02)", "gold_chunks": [["people/team.md", 0], ["people/team.md", 0]], "type": "multi-hop"}
+{"id": "q32", "query": "What error code was reported in the same incident whose root cause was a firmware race condition?", "gold_answer": "ERR_LIDAR_TIMEOUT", "gold_chunks": [["ops/incidents.md", 0], ["ops/incidents.md", 0]], "type": "multi-hop"}
